@@ -45,11 +45,26 @@ def init(c):
 def token():
  rt=os.getenv("MFL_REFRESH_TOKEN")
  if not rt: raise RuntimeError("MFL_REFRESH_TOKEN missing")
- r=requests.post(BASE+"/auth/refresh",headers=H,json={"refreshToken":rt},timeout=20); r.raise_for_status()
- d=r.json(); a=d.get("access") or ((d.get("data") or {}).get("access") if isinstance(d.get("data"),dict) else None)
- if isinstance(a,dict):a=a.get("token")
- if not a:raise RuntimeError("No access token returned")
- return a
+ last=None
+ for attempt in range(4):
+  try:
+   r=requests.post(BASE+"/auth/refresh",headers=H,json={"refreshToken":rt},timeout=20)
+   if r.status_code in (429,500,502,503,504):
+    last=f"HTTP {r.status_code}: {r.text[:300]}"
+    time.sleep(min(15,2*(2**attempt)))
+    continue
+   r.raise_for_status()
+   d=r.json()
+   a=d.get("access") or ((d.get("data") or {}).get("access") if isinstance(d.get("data"),dict) else None)
+   if isinstance(a,dict): a=a.get("token")
+   if not a: raise RuntimeError("No access token returned")
+   return a
+  except (requests.Timeout, requests.ConnectionError) as e:
+   last=str(e); time.sleep(min(15,2*(2**attempt)))
+ raise RuntimeError("MFL authentication is temporarily failing after retries. "
+                    "This is an API/server response, not a lost agency database. "
+                    f"Last response: {last}")
+
 def ah(t):
  h=dict(H);h["Authorization"]="Bearer "+t;return h
 def get(path,t,params=None):
@@ -671,7 +686,7 @@ def probe_match_endpoints(player_id):
   except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
  return out
 
-APP_BACKEND_VERSION = "2.17"
+APP_BACKEND_VERSION = "2.17.1"
 
 def probe_match_feed_filters(player_id, club_id=None, squad_id=None):
  """Targeted diagnostic based on the confirmed /matches/feed route.
