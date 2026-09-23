@@ -19,6 +19,29 @@ st.title("🌱 MFL Agency Development")
 st.caption("Track how your MFL players develop while they are in your agency.")
 
 
+
+with st.expander("🕒 Refresh-token expiry check", expanded=True):
+    st.caption("Decoded locally from the JWT metadata. The token itself is never displayed or changed.")
+    meta=ab.refresh_token_metadata()
+    if not meta.get("present"):
+        st.error("MFL_REFRESH_TOKEN is missing from Streamlit Secrets.")
+    elif meta.get("shape") != "JWT-like":
+        st.info(f"Token is present but is not JWT-shaped. Length: {meta.get('length')}")
+    elif meta.get("decode_error"):
+        st.error(meta.get("decode_error"))
+    else:
+        claims=meta.get("claims",{})
+        st.write(f"**Issued:** {claims.get('iat_utc','Not supplied')}")
+        st.write(f"**Expires:** {claims.get('exp_utc','Not supplied')}")
+        expired=claims.get("expired")
+        if expired is True:
+            st.error("❌ EXPIRED — the stored refresh token has passed its expiry time.")
+        elif expired is False:
+            secs=max(0,claims.get("seconds_until_expiry",0))
+            st.success(f"✅ NOT EXPIRED — approximately {secs//3600} hours remain.")
+        else:
+            st.warning("The token has no expiry (`exp`) claim, so expiry cannot be determined from the JWT.")
+
 with st.expander("🔐 MFL authentication diagnostic"):
     st.caption("Read-only test. It does not change your token or agency database, and token values are never displayed.")
     if st.button("Run authentication diagnostic"):

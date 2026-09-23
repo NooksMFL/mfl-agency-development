@@ -686,7 +686,7 @@ def probe_match_endpoints(player_id):
   except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
  return out
 
-APP_BACKEND_VERSION = "2.19"
+APP_BACKEND_VERSION = "2.19.1"
 
 def probe_match_feed_filters(player_id, club_id=None, squad_id=None):
  """Targeted diagnostic based on the confirmed /matches/feed route.
@@ -830,3 +830,34 @@ def auth_diagnostic():
             item["error"]=f"{type(e).__name__}: {e}"
         result["tests"].append(item)
     return result
+
+
+def refresh_token_metadata():
+    """Decode safe JWT timing claims locally without exposing the token."""
+    import base64, json
+    from datetime import datetime, timezone
+    rt=os.getenv("MFL_REFRESH_TOKEN")
+    if not rt:
+        return {"present":False}
+    out={"present":True,"shape":"JWT-like" if rt.count(".")==2 else "opaque","length":len(rt)}
+    if rt.count(".") != 2:
+        return out
+    try:
+        payload=rt.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims=json.loads(base64.urlsafe_b64decode(payload.encode()).decode())
+        safe={}
+        for key in ("iat","exp","nbf"):
+            val=claims.get(key)
+            if isinstance(val,(int,float)):
+                safe[key]=val
+                safe[key+"_utc"]=datetime.fromtimestamp(val,tz=timezone.utc).isoformat()
+        exp=claims.get("exp")
+        if isinstance(exp,(int,float)):
+            now=datetime.now(timezone.utc).timestamp()
+            safe["expired"]=now >= exp
+            safe["seconds_until_expiry"]=int(exp-now)
+        out["claims"]=safe
+    except Exception as e:
+        out["decode_error"]=f"{type(e).__name__}: {e}"
+    return out
