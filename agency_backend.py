@@ -671,4 +671,33 @@ def probe_match_endpoints(player_id):
   except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
  return out
 
-APP_BACKEND_VERSION = "2.14"
+APP_BACKEND_VERSION = "2.15"
+
+def probe_match_detail(match_id, player_id=None):
+ """Diagnostic: inspect a known match and plausible stats/lineup routes."""
+ mid=int(match_id); pid=int(player_id) if player_id else None; t=token()
+ candidates=[
+  (f"/matches/{mid}",None),
+  (f"/matches/{mid}/stats",None),
+  (f"/matches/{mid}/lineups",None),
+  (f"/matches/{mid}/players",None),
+  (f"/matches/{mid}/events",None),
+  (f"/matches/{mid}/report",None),
+  (f"/matches/{mid}/player-stats",None),
+ ]
+ if pid:
+  candidates += [
+   (f"/matches/{mid}/players/{pid}",None),
+   (f"/matches/{mid}/player-stats/{pid}",None),
+  ]
+ out=[]
+ for path,params in candidates:
+  try:
+   r=requests.get(BASE+path,headers=ah(t),params=params,timeout=12)
+   item={"path":path,"status":r.status_code}
+   try:item["json"]=r.json()
+   except Exception:item["text"]=r.text[:1200]
+   out.append(item)
+   if r.status_code==429:break
+  except Exception as e:out.append({"path":path,"error":str(e)})
+ return out

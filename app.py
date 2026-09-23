@@ -250,6 +250,22 @@ with st.expander("🔎 Real match-history API diagnostic"):
   except Exception as e:
    st.error(f"{type(e).__name__}: {e}")
 
+
+with st.expander("🧪 Match detail / lineup diagnostic"):
+ st.caption("The /matches/feed result is a global live feed — playerId did not filter it. This probes a specific match object for lineups, stats, events and player participation.")
+ known_match=st.number_input("Match ID",min_value=1,value=2722915,step=1)
+ known_player=st.number_input("Player ID to look for",min_value=1,value=144031,step=1)
+ if st.button("Probe match detail"):
+  try:
+   with st.spinner("Inspecting match detail routes…"):
+    detail_probe=ab.probe_match_detail(int(known_match),int(known_player))
+   for result in detail_probe:
+    status=result.get("status","error")
+    with st.expander(f"{status} · {result.get('path')}",expanded=(status==200)):
+     st.json(result,expanded=True)
+  except Exception as e:
+   st.error(f"{type(e).__name__}: {e}")
+
 m1,m2,m3,m4,m5=st.columns(5)
 activity_df=pd.DataFrame(ab.agency_v28(wallet))
 if not df.empty and not activity_df.empty:
