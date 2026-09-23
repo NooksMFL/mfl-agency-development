@@ -143,16 +143,13 @@ def analyse(pid,wallet,t):
   start={k:None for k in STATS}
  first=parsed[0][0] if parsed else None
  return pid,cur,source,confidence,(acq if confidence=="VERIFIED" else None),effective,start,owned,last,first,len(parsed)
-def sync(wallet,progress=None,batch_size=10):
+def sync(wallet,progress=None,batch_size=12):
  wallet=wallet.strip().lower();t=token()
  ids=list(dict.fromkeys(pid(x) for x in roster(wallet,t)))
  c=db();init(c)
  cached={r["player_id"]:r for r in c.execute("SELECT * FROM ownership_v65 WHERE wallet=?",(wallet,))}
  uncached=[x for x in ids if x not in cached]
- # Validation priority: known purchased player Arnt Jenssen. This lets us verify
- # purchase-date baseline logic before spending requests on the rest of the agency.
- priority=[374865] if 374865 in uncached else []
- todo=(priority+[x for x in uncached if x not in priority])[:batch_size]
+ todo=uncached[:batch_size]
  results=[];errors=[]
  for n,x in enumerate(todo,1):
   try:results.append(analyse(x,wallet,t))

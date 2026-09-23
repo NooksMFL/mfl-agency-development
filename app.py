@@ -1,41 +1,115 @@
-import os,streamlit as st,pandas as pd
+import os, sqlite3
+from datetime import datetime, timezone
+import pandas as pd
+import streamlit as st
 import agency_backend as ab
+
 st.set_page_config(page_title="MFL Agency Development",page_icon="🌱",layout="wide")
 try:
- if "MFL_REFRESH_TOKEN" in st.secrets:os.environ["MFL_REFRESH_TOKEN"]=st.secrets["MFL_REFRESH_TOKEN"]
-except Exception:pass
+ if "MFL_REFRESH_TOKEN" in st.secrets: os.environ["MFL_REFRESH_TOKEN"]=st.secrets["MFL_REFRESH_TOKEN"]
+except Exception: pass
+
 st.title("🌱 MFL Agency Development")
-st.caption("How much have your players developed while you owned them?")
-wallet=st.text_input("Dapper wallet address",value="0x65cc0e72dd71ad80").strip()
-st.info("API-safe mode: the next batch prioritises the known purchased-player test (Arnt Jenssen, 374865), then analyses other uncached players. This lets us validate purchase-time development before scanning the whole agency.")
-if wallet and st.button("Analyse next batch",type="primary"):
- bar=st.progress(0,text="Loading a small batch of ownership + progression history…")
- def prog(n,total):bar.progress(n/max(total,1),text=f"Analysing this batch… {n}/{total}")
+st.caption("Track how players develop while they are in your agency.")
+
+wallet=st.text_input("Dapper wallet address",value="0x65cc0e72dd71ad80").strip().lower()
+c=ab.db(); ab.init(c)
+
+def load():
+ rows=c.execute("""SELECT o.*,COALESCE(t.tag,'NORMAL') tag,COALESCE(t.note,'') note
+ FROM ownership_v65 o LEFT JOIN tags t ON t.wallet=o.wallet AND t.player_id=o.player_id
+ WHERE o.wallet=?""",(wallet,)).fetchall()
+ if not rows:return pd.DataFrame()
+ d=pd.DataFrame([dict(r) for r in rows])
+ pairs=[("OVR +","current_ovr","start_ovr"),("PAC +","current_pac","start_pac"),("SHO +","current_sho","start_sho"),
+ ("PAS +","current_pas","start_pas"),("DRI +","current_dri","start_dri"),("DEF +","current_def","start_def"),("PHY +","current_phy","start_phy")]
+ for label,cur,start in pairs:d[label]=pd.to_numeric(d[cur],errors="coerce")-pd.to_numeric(d[start],errors="coerce")
+ d["Acquired"]=pd.to_datetime(d.acquired_at,utc=True,errors="coerce").dt.strftime("%d %b %Y")
+ d["History starts"]=pd.to_datetime(d.history_start,utc=True,errors="coerce").dt.strftime("%d %b %Y")
+ d["Auto status"]=d.apply(lambda r:"NEW MINT" if r["source"]=="NEW MINT / ORIGINAL" and (r["OVR +"]==0 or pd.isna(r["OVR +"])) else ("DEVELOPING" if pd.notna(r["OVR +"]) and r["OVR +"]>0 else "TRACKED"),axis=1)
+ return d
+
+df=load()
+analysed=len(df)
+st.subheader("Agency import")
+st.caption("Historical ownership is cached. Each batch only analyses players not already stored, keeping requests gentle on MFL.")
+if st.button("Analyse next 12 players",type="primary"):
+ bar=st.progress(0,text="Preparing batch…")
+ def prog(n,total):bar.progress(n/max(total,1),text=f"Analysing {n}/{total}…")
  try:
-  total,ok,errors,analysed,planned=ab.sync(wallet,prog,batch_size=10);bar.empty()
-  st.success(f"Batch complete: {ok} added · {analysed}/{total} agency players analysed so far.")
-  if planned==0:st.success("Historical analysis is complete for all currently owned players.")
-  if errors:st.warning(f"{len(errors)} player(s) could not be analysed this batch. If MFL rate-limited the request, wait a little before the next batch.")
+  total,ok,errors,analysed,planned=ab.sync(wallet,prog,batch_size=12);bar.empty()
+  st.success(f"{ok} added · {analysed}/{total} agency players analysed.")
+  if errors:st.warning(f"{len(errors)} player(s) could not be analysed. If MFL rate-limited the request, wait before trying again.")
+  st.rerun()
  except Exception as e:bar.empty();st.error(f"{type(e).__name__}: {e}")
-if wallet:
- c=ab.db();ab.init(c)
- rows=c.execute("""SELECT o.*,COALESCE(t.tag,'NORMAL') tag,COALESCE(t.note,'') note FROM ownership_v65 o
- LEFT JOIN tags t ON t.wallet=o.wallet AND t.player_id=o.player_id WHERE o.wallet=?""",(wallet.lower(),)).fetchall()
- if rows:
-  df=pd.DataFrame([dict(r) for r in rows])
-  for label,cur,start in [("OVR +","current_ovr","start_ovr"),("PAC +","current_pac","start_pac"),("SHO +","current_sho","start_sho"),("PAS +","current_pas","start_pas"),("DRI +","current_dri","start_dri"),("DEF +","current_def","start_def"),("PHY +","current_phy","start_phy")]:df[label]=df[cur]-df[start]
-  df["Acquired"]=pd.to_datetime(df.acquired_at,utc=True,errors="coerce").dt.strftime("%d %b %Y")
-  df["History starts"]=pd.to_datetime(df.history_start,utc=True,errors="coerce").dt.strftime("%d %b %Y")
-  a,b,c1,d=st.columns(4);a.metric("Players analysed",len(df));b.metric("Bought",int((df.source=="BOUGHT").sum()));c1.metric("Other / packed",int((df.source!="BOUGHT").sum()));d.metric("Tagged",int((df.tag!="NORMAL").sum()))
-  filt=st.segmented_control("View",["ALL","NEW MINT","DEVELOP","PRIORITY","WATCH","NORMAL"],default="ALL")
-  v=df if filt=="ALL" else df[df.tag==filt]
-  st.dataframe(v[["tag","player_name","source","confidence","Acquired","History starts","start_ovr","current_ovr","OVR +","PAC +","SHO +","PAS +","DRI +","DEF +","PHY +","event_count"]],
-   hide_index=True,use_container_width=True,column_config={"player_name":"Player","source":"Ownership","start_ovr":"Acquired OVR","current_ovr":"Current OVR","event_count":"History events","confidence":"Acquisition confidence"})
-  st.caption("BOUGHT = verified marketplace purchase into this wallet. NEW MINT / ORIGINAL = no sale into this wallet and MFL history begins with an INITIAL event. For these players, History starts is the INITIAL player-state date; it is not labelled as a marketplace acquisition.")
-  st.subheader("🌱 Mark a prospect")
-  opts={f'{r.player_name} ({r.player_id})':int(r.player_id) for _,r in df.iterrows()};who=st.selectbox("Player",opts)
-  ex=df[df.player_id==opts[who]].iloc[0];tags=["NEW MINT","DEVELOP","PRIORITY","WATCH","NORMAL"]
-  tag=st.selectbox("Tag",tags,index=tags.index(ex.tag) if ex.tag in tags else 4);note=st.text_input("Private note",value=ex.note)
-  if st.button("Save tag"):
-   c.execute("INSERT INTO tags(wallet,player_id,tag,note) VALUES(?,?,?,?) ON CONFLICT(wallet,player_id) DO UPDATE SET tag=excluded.tag,note=excluded.note",(wallet.lower(),opts[who],tag,note));c.commit();st.rerun()
- c.close()
+
+df=load()
+if df.empty:
+ st.info("Run the first batch to build your agency dashboard.")
+ st.stop()
+
+# headline metrics
+newm=int((df["source"]=="NEW MINT / ORIGINAL").sum())
+bought=int((df["source"]=="BOUGHT").sum())
+developing=int((pd.to_numeric(df["OVR +"],errors="coerce")>0).sum())
+priority=int((df.tag=="PRIORITY").sum())
+m1,m2,m3,m4,m5=st.columns(5)
+m1.metric("Players analysed",len(df))
+m2.metric("New / original",newm)
+m3.metric("Bought",bought)
+m4.metric("OVR improved",developing)
+m5.metric("Priority",priority)
+
+tab1,tab2,tab3,tab4=st.tabs(["🏆 Development","🆕 New Mints","🎯 Watchlist","👥 Full Agency"])
+
+with tab1:
+ st.subheader("Top developers")
+ dev=df[pd.to_numeric(df["OVR +"],errors="coerce")>0].sort_values(["OVR +","current_ovr"],ascending=[False,False])
+ if dev.empty:st.info("No analysed players have increased OVR yet.")
+ else:
+  st.dataframe(dev[["player_name","source","start_ovr","current_ovr","OVR +","PAC +","SHO +","PAS +","DRI +","DEF +","PHY +"]],
+   hide_index=True,use_container_width=True,column_config={"player_name":"Player","source":"Ownership","start_ovr":"Start OVR","current_ovr":"Current OVR"})
+ st.subheader("Attribute movers")
+ movers=df.copy()
+ movers["Attribute gains"]=movers[["PAC +","SHO +","PAS +","DRI +","DEF +","PHY +"]].fillna(0).sum(axis=1)
+ movers=movers[movers["Attribute gains"]>0].sort_values(["Attribute gains","OVR +"],ascending=False)
+ if movers.empty:st.caption("No attribute gains in analysed players yet.")
+ else:st.dataframe(movers[["player_name","current_ovr","OVR +","Attribute gains","PAC +","SHO +","PAS +","DRI +","DEF +","PHY +"]],hide_index=True,use_container_width=True)
+
+with tab2:
+ mint=df[df.source=="NEW MINT / ORIGINAL"].sort_values(["history_start","current_ovr"],ascending=[False,False])
+ st.caption("Players with no marketplace purchase into this wallet whose MFL history begins with an INITIAL state.")
+ st.dataframe(mint[["player_name","History starts","start_ovr","current_ovr","OVR +","PAC +","SHO +","PAS +","DRI +","DEF +","PHY +","tag"]],
+  hide_index=True,use_container_width=True,column_config={"player_name":"Player","start_ovr":"Initial OVR","current_ovr":"Current OVR","tag":"Your tag"})
+
+with tab3:
+ st.subheader("Your development list")
+ watch=df[df.tag.isin(["DEVELOP","PRIORITY","WATCH"])].copy()
+ if watch.empty:st.info("Tag players as DEVELOP, PRIORITY or WATCH below and they'll appear here.")
+ else:st.dataframe(watch[["tag","player_name","source","start_ovr","current_ovr","OVR +","note"]],hide_index=True,use_container_width=True)
+ st.subheader("Tag / note a player")
+ labels={f'{r.player_name} · {int(r.player_id)}':int(r.player_id) for _,r in df.sort_values("player_name").iterrows()}
+ choice=st.selectbox("Player",labels)
+ ex=df[df.player_id==labels[choice]].iloc[0]
+ tags=["NORMAL","DEVELOP","PRIORITY","WATCH"]
+ tag=st.selectbox("Status",tags,index=tags.index(ex.tag) if ex.tag in tags else 0)
+ note=st.text_input("Note",value=ex.note)
+ if st.button("Save player status"):
+  c.execute("""INSERT INTO tags(wallet,player_id,tag,note) VALUES(?,?,?,?)
+  ON CONFLICT(wallet,player_id) DO UPDATE SET tag=excluded.tag,note=excluded.note""",(wallet,labels[choice],tag,note));c.commit();st.rerun()
+
+with tab4:
+ search=st.text_input("Search player")
+ view=df.copy()
+ if search:view=view[view.player_name.str.contains(search,case=False,na=False)]
+ ownership=st.multiselect("Ownership",sorted(view.source.dropna().unique().tolist()))
+ if ownership:view=view[view.source.isin(ownership)]
+ sort=st.selectbox("Sort by",["OVR gain","Current OVR","Player"],index=0)
+ if sort=="OVR gain":view=view.sort_values(["OVR +","current_ovr"],ascending=[False,False],na_position="last")
+ elif sort=="Current OVR":view=view.sort_values("current_ovr",ascending=False)
+ else:view=view.sort_values("player_name")
+ st.dataframe(view[["tag","player_name","source","Acquired","History starts","start_ovr","current_ovr","OVR +","PAC +","SHO +","PAS +","DRI +","DEF +","PHY +"]],
+  hide_index=True,use_container_width=True,column_config={"player_name":"Player","source":"Ownership","start_ovr":"Start OVR","current_ovr":"Current OVR"})
+
+st.caption("BOUGHT uses a verified marketplace acquisition into this wallet. NEW / ORIGINAL uses the player's MFL INITIAL state as the development baseline.")
+c.close()
