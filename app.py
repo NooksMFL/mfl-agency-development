@@ -71,7 +71,7 @@ def load():
  ("PAS +","current_pas","start_pas"),("DRI +","current_dri","start_dri"),("DEF +","current_def","start_def"),("PHY +","current_phy","start_phy")]:
   d[lab]=pd.to_numeric(d[cur],errors="coerce")-pd.to_numeric(d[start],errors="coerce")
  d["Acquired"]=pd.to_datetime(d.acquired_at,utc=True,errors="coerce")
- d["Initial date"]=pd.to_datetime(d.history_start,utc=True,errors="coerce")
+ d["Joined agency"]=pd.to_datetime(d.acquired_at.where(d.source.eq("BOUGHT"), d.history_start),utc=True,errors="coerce")
  last=pd.to_datetime(d.last_event_at,utc=True,errors="coerce")
  now=pd.Timestamp.now(tz="UTC")
  d["Days since activity"]=(now-last).dt.days
@@ -487,8 +487,18 @@ with tabs[1]:
 
 with tabs[2]:
  mint=df[df.source=="NEW MINT / ORIGINAL"].sort_values(["OVR +","current_ovr"],ascending=False)
- st.dataframe(mint[["Status","player_name","age","Initial date","start_ovr","current_ovr","OVR +","match_events","Days since activity"]],
-  hide_index=True,use_container_width=True,column_config={"player_name":"Player","start_ovr":"Initial","current_ovr":"Current"})
+ # Older cached rows may pre-date INITIAL-date parsing; repair a small batch safely.
+ if mint["Joined agency"].isna().any():
+  key=f"joined_v24_{wallet}"
+  if not st.session_state.get(key):
+   try:
+    ab.backfill_joined_dates_v24(wallet,limit=20)
+    st.session_state[key]=True
+    st.rerun()
+   except Exception:
+    st.session_state[key]=True
+ st.dataframe(mint[["Status","player_name","age","Joined agency","start_ovr","current_ovr","OVR +","match_events","Days since activity"]],
+  hide_index=True,use_container_width=True,column_config={"player_name":"Player","Joined agency":st.column_config.DatetimeColumn("Joined agency",format="DD MMM YYYY"),"start_ovr":"Initial","current_ovr":"Current"})
 with tabs[3]:
  mine=df[df.tag!="NORMAL"]
  if mine.empty:st.info("No manual development tags yet.")

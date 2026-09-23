@@ -686,7 +686,7 @@ def probe_match_endpoints(player_id):
   except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
  return out
 
-APP_BACKEND_VERSION = "2.23"
+APP_BACKEND_VERSION = "2.24"
 
 def probe_match_feed_filters(player_id, club_id=None, squad_id=None):
  """Targeted diagnostic based on the confirmed /matches/feed route.
@@ -904,3 +904,30 @@ def refresh_metadata_v23(wallet):
             continue
     c.commit(); c.close()
     return {"roster_rows":updated,"profile_backfill_attempted":min(len(unresolved),40)}
+
+
+def backfill_joined_dates_v24(wallet, limit=20):
+    """Repair missing joined dates for NEW MINT / ORIGINAL rows from the MFL INITIAL event."""
+    wallet=wallet.strip().lower(); c=db(); init(c); t=token()
+    rows=c.execute("""SELECT player_id FROM ownership_v65
+                      WHERE wallet=? AND source='NEW MINT / ORIGINAL'
+                      AND (history_start IS NULL OR history_start='')
+                      ORDER BY player_id LIMIT ?""",(wallet,int(limit))).fetchall()
+    updated=0
+    for row in rows:
+        pidv=int(row["player_id"])
+        try:
+            exps=exp_history(pidv,t)
+            parsed=[]
+            for e in exps:
+                when=todt(e.get("date") or e.get("createdAt") or e.get("timestamp"))
+                reason=str(e.get("reasonType") or e.get("type") or e.get("eventType") or "").upper()
+                if when and reason=="INITIAL": parsed.append(when)
+            if parsed:
+                c.execute("UPDATE ownership_v65 SET history_start=? WHERE wallet=? AND player_id=?",
+                          (iso(min(parsed)),wallet,pidv))
+                updated+=1; c.commit()
+        except Exception as e:
+            if "429" in str(e) or "rate" in str(e).lower(): break
+        time.sleep(0.35)
+    c.close(); return {"checked":len(rows),"updated":updated}
