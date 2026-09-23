@@ -18,6 +18,31 @@ except Exception:pass
 st.title("🌱 MFL Agency Development")
 st.caption("Track how your MFL players develop while they are in your agency.")
 
+
+with st.expander("🔐 MFL authentication diagnostic"):
+    st.caption("Read-only test. It does not change your token or agency database, and token values are never displayed.")
+    if st.button("Run authentication diagnostic"):
+        with st.spinner("Testing MFL authentication safely…"):
+            auth_diag=ab.auth_diagnostic()
+        if auth_diag.get("refresh_token_present"):
+            st.write(f"Refresh token present: **Yes** · shape: **{auth_diag.get('refresh_token_shape')}** · length: **{auth_diag.get('refresh_token_length')}**")
+        else:
+            st.error("MFL_REFRESH_TOKEN is missing from Streamlit Secrets.")
+        for test in auth_diag.get("tests",[]):
+            status=test.get("status")
+            if status in (200,201):
+                st.success(f"{test.get('name')}: HTTP {status} — authentication accepted.")
+            elif status in (401,403):
+                st.error(f"{test.get('name')}: HTTP {status} — token/authentication rejected.")
+            elif status == 429:
+                st.warning(f"{test.get('name')}: HTTP 429 — rate limited. Retry-After: {test.get('retry_after')}")
+            elif status and status >= 500:
+                st.warning(f"{test.get('name')}: HTTP {status} — MFL server failed while processing the request.")
+            else:
+                st.info(f"{test.get('name')}: no conclusive HTTP result.")
+            with st.expander(f"Technical result · {test.get('name')}"):
+                st.json(test)
+
 st.subheader("Load your agency")
 st.write("Enter your **Dapper wallet address** below. You do not need to sign in or enter an MFL token.")
 

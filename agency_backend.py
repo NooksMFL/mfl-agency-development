@@ -686,7 +686,7 @@ def probe_match_endpoints(player_id):
   except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
  return out
 
-APP_BACKEND_VERSION = "2.18.1"
+APP_BACKEND_VERSION = "2.19"
 
 def probe_match_feed_filters(player_id, club_id=None, squad_id=None):
  """Targeted diagnostic based on the confirmed /matches/feed route.
@@ -790,3 +790,43 @@ def auth_health():
   return {"ok":True,"message":"MFL API connected"}
  except Exception as e:
   return {"ok":False,"message":str(e)}
+
+
+def auth_diagnostic():
+    """Read-only auth diagnostic; never returns token values."""
+    rt=os.getenv("MFL_REFRESH_TOKEN")
+    result={
+        "refresh_token_present": bool(rt),
+        "refresh_token_length": len(rt) if rt else 0,
+        "refresh_token_shape": "JWT-like" if rt and rt.count(".")==2 else ("opaque" if rt else "missing"),
+        "tests":[]
+    }
+    if not rt:
+        return result
+    tests=[
+        ("current_browser_headers", H, {"refreshToken":rt}),
+        ("minimal_json_headers", {
+            "Accept":"application/json",
+            "Content-Type":"application/json",
+            "User-Agent":H.get("User-Agent","Mozilla/5.0")
+        }, {"refreshToken":rt}),
+    ]
+    for name,headers,payload in tests:
+        item={"name":name}
+        try:
+            r=requests.post(BASE+"/auth/refresh",headers=headers,json=payload,timeout=20)
+            item["status"]=r.status_code
+            item["content_type"]=r.headers.get("content-type")
+            item["retry_after"]=r.headers.get("retry-after")
+            try:
+                js=r.json()
+                if isinstance(js,dict):
+                    item["body"]={k:("[redacted]" if any(x in str(k).lower() for x in ("token","access","refresh")) else v) for k,v in js.items()}
+                else:
+                    item["body"]=js
+            except Exception:
+                item["body_text"]=r.text[:500]
+        except Exception as e:
+            item["error"]=f"{type(e).__name__}: {e}"
+        result["tests"].append(item)
+    return result
