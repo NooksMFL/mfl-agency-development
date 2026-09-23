@@ -1,8 +1,32 @@
+import shutil
+from pathlib import Path
 import os, sqlite3, requests, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 BASE="https://api.playmfl.com"; DB="agency_development.db"
+SEED_DB=Path(__file__).with_name("agency_seed.db")
+
+def ensure_seed_database():
+ try:
+  p=Path(DB)
+  needs=(not p.exists()) or p.stat().st_size < 4096
+  if not needs:
+   c=sqlite3.connect(DB)
+   try:
+    tables={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    needs=("ownership_v65" not in tables or c.execute("SELECT COUNT(*) FROM ownership_v65").fetchone()[0]==0)
+   finally:
+    c.close()
+  if needs and SEED_DB.exists():
+   shutil.copy2(SEED_DB,p)
+   return True
+ except Exception:
+  return False
+ return False
+
+SEEDED_ON_START=ensure_seed_database()
+
 H={"Accept":"*/*","Origin":"https://app.playmfl.com","Referer":"https://app.playmfl.com/",
 "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0"}
 STATS=("overall","pace","shooting","passing","dribbling","defense","physical")
@@ -647,4 +671,4 @@ def probe_match_endpoints(player_id):
   except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
  return out
 
-APP_BACKEND_VERSION = "2.13.1"
+APP_BACKEND_VERSION = "2.14"
