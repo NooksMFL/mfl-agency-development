@@ -136,7 +136,7 @@ def sync(wallet,progress=None):
    if progress:progress(done,len(ids))
  c=db();init(c);now=datetime.now(timezone.utc).isoformat()
  for player_id,cur,source,acq,start,owned,last in results:
-  c.execute("""INSERT INTO ownership_v6 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  c.execute("""INSERT INTO ownership_v6 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(wallet,player_id) DO UPDATE SET player_name=excluded.player_name,source=excluded.source,acquired_at=excluded.acquired_at,
   start_ovr=excluded.start_ovr,start_pac=excluded.start_pac,start_sho=excluded.start_sho,start_pas=excluded.start_pas,start_dri=excluded.start_dri,start_def=excluded.start_def,start_phy=excluded.start_phy,
   current_ovr=excluded.current_ovr,current_pac=excluded.current_pac,current_sho=excluded.current_sho,current_pas=excluded.current_pas,current_dri=excluded.current_dri,current_def=excluded.current_def,current_phy=excluded.current_phy,
