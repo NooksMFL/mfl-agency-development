@@ -10,7 +10,7 @@ STATS=("overall","pace","shooting","passing","dribbling","defense","physical")
 def db():
  c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
 def init(c):
- c.executescript("""CREATE TABLE IF NOT EXISTS ownership_v63(
+ c.executescript("""CREATE TABLE IF NOT EXISTS ownership_v65(
  wallet TEXT,player_id INTEGER,player_name TEXT,source TEXT,confidence TEXT,acquired_at TEXT,history_start TEXT,
  start_ovr REAL,start_pac REAL,start_sho REAL,start_pas REAL,start_dri REAL,start_def REAL,start_phy REAL,
  current_ovr REAL,current_pac REAL,current_sho REAL,current_pas REAL,current_dri REAL,current_def REAL,current_phy REAL,
@@ -111,7 +111,7 @@ def reconstruct(exps,acq,current):
   when=todt(e.get("date") or e.get("createdAt") or e.get("timestamp"))
   if when:parsed.append((when,e))
  parsed.sort(key=lambda z:z[0])
- initials=[x for x in parsed if str(x[1].get("type") or x[1].get("eventType") or "").upper()=="INITIAL"]
+ initials=[x for x in parsed if str(x[1].get("reasonType") or x[1].get("type") or x[1].get("eventType") or "").upper()=="INITIAL"]
  if acq:
   effective=acq; baseline_label="PURCHASE"
  elif initials:
@@ -137,7 +137,8 @@ def analyse(pid,wallet,t):
  effective,start,owned,last,baseline_label,parsed=reconstruct(exps,acq,cur)
  # No marketplace purchase + INITIAL is evidence of an original/minted history, but not proof this wallet minted it.
  if source=="NO MARKET PURCHASE" and baseline_label=="INITIAL":
-  source="POSSIBLE ORIGINAL / MINT"
+  source="NEW MINT / ORIGINAL"
+  confidence="INITIAL HISTORY"
  if start is None:
   start={k:None for k in STATS}
  first=parsed[0][0] if parsed else None
@@ -146,7 +147,7 @@ def sync(wallet,progress=None,batch_size=10):
  wallet=wallet.strip().lower();t=token()
  ids=list(dict.fromkeys(pid(x) for x in roster(wallet,t)))
  c=db();init(c)
- cached={r["player_id"]:r for r in c.execute("SELECT * FROM ownership_v63 WHERE wallet=?",(wallet,))}
+ cached={r["player_id"]:r for r in c.execute("SELECT * FROM ownership_v65 WHERE wallet=?",(wallet,))}
  todo=[x for x in ids if x not in cached][:batch_size]
  results=[];errors=[]
  for n,x in enumerate(todo,1):
@@ -158,7 +159,7 @@ def sync(wallet,progress=None,batch_size=10):
   time.sleep(0.45)
  now=datetime.now(timezone.utc).isoformat()
  for player_id,cur,source,confidence,acq,hstart,start,owned,last,first,event_count in results:
-  c.execute("""INSERT INTO ownership_v63 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  c.execute("""INSERT INTO ownership_v65 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(wallet,player_id) DO UPDATE SET player_name=excluded.player_name,source=excluded.source,confidence=excluded.confidence,
   acquired_at=excluded.acquired_at,history_start=excluded.history_start,start_ovr=excluded.start_ovr,start_pac=excluded.start_pac,
   start_sho=excluded.start_sho,start_pas=excluded.start_pas,start_dri=excluded.start_dri,start_def=excluded.start_def,start_phy=excluded.start_phy,
@@ -169,7 +170,7 @@ def sync(wallet,progress=None,batch_size=10):
    start["overall"],start["pace"],start["shooting"],start["passing"],start["dribbling"],start["defense"],start["physical"],
    cur["overall"],cur["pace"],cur["shooting"],cur["passing"],cur["dribbling"],cur["defense"],cur["physical"],owned,iso(last),iso(first),event_count,now))
  c.commit()
- analysed=c.execute("SELECT COUNT(*) FROM ownership_v63 WHERE wallet=?",(wallet,)).fetchone()[0]
+ analysed=c.execute("SELECT COUNT(*) FROM ownership_v65 WHERE wallet=?",(wallet,)).fetchone()[0]
  c.close()
  return len(ids),len(results),errors,analysed,len(todo)
 
