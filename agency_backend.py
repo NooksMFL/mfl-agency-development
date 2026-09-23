@@ -88,19 +88,25 @@ def first_scalar(obj, names):
 
 def player_meta_from_payload(payload):
  p=unwrap(payload)
- age=first_scalar(p,["age"])
- pos=first_scalar(p,["position","preferredPosition","primaryPosition","naturalPosition"])
- # Club/team is intentionally conservative: prefer named current/active contract structures.
+ m=p.get("metadata") if isinstance(p,dict) else {}
+ if not isinstance(m,dict): m={}
+ age=m.get("age")
+ positions=m.get("positions") or []
+ if isinstance(positions,str): positions=[positions]
+ position=" / ".join(str(x) for x in positions if x) or None
+
+ # Diagnostic confirmed the existing club search resolves the current club.
  club=None
  for key in ("activeContract","contract","currentClub","club"):
   candidates=deep_values(p,[key])
   for _,v in candidates:
    if isinstance(v,dict):
     club=first_scalar(v,["name","clubName","teamName"])
-   elif isinstance(v,str): club=v
+   elif isinstance(v,str):
+    club=v
    if club: break
   if club: break
- return {"age":age,"position":pos,"club":club}
+ return {"age":age,"position":position,"club":club}
 
 def profile(pid,t):
  p=unwrap(get(f"/players/{pid}",t));m=p.get("metadata") or {}

@@ -1,61 +1,159 @@
-import os,json
+import os
+from datetime import datetime, timezone
+import pandas as pd
 import streamlit as st
 import agency_backend as ab
 
-st.set_page_config(page_title="MFL Metadata Diagnostic",page_icon="🔎",layout="wide")
+st.set_page_config(page_title="MFL Agency Development",page_icon="🌱",layout="wide")
 try:
  if "MFL_REFRESH_TOKEN" in st.secrets:os.environ["MFL_REFRESH_TOKEN"]=st.secrets["MFL_REFRESH_TOKEN"]
 except Exception:pass
 
-st.title("🔎 MFL Player Metadata Diagnostic")
-st.caption("One-player diagnostic only. This does not change or rebuild your 352-player agency cache.")
+st.title("🌱 MFL Agency Development")
+st.caption("Development management for your MFL agency.")
+wallet=st.text_input("Dapper wallet",value="0x65cc0e72dd71ad80",label_visibility="collapsed").strip().lower()
+c=ab.db();ab.init(c);ab.ensure_v2(c)
 
-pid=st.number_input("Player ID",min_value=1,value=411974,step=1)
-wallet=st.text_input("Wallet",value="0x65cc0e72dd71ad80").strip().lower()
+def load():
+ rows=c.execute("""SELECT o.*,COALESCE(t.tag,'NORMAL') tag,COALESCE(t.note,'') note,
+ m.age,m.position,m.club,a.last_event_at,a.match_events,a.training_events,a.total_events
+ FROM ownership_v65 o
+ LEFT JOIN tags t ON t.wallet=o.wallet AND t.player_id=o.player_id
+ LEFT JOIN player_meta m ON m.wallet=o.wallet AND m.player_id=o.player_id
+ LEFT JOIN activity a ON a.wallet=o.wallet AND a.player_id=o.player_id
+ WHERE o.wallet=?""",(wallet,)).fetchall()
+ if not rows:return pd.DataFrame()
+ d=pd.DataFrame([dict(r) for r in rows])
+ for lab,cur,start in [("OVR +","current_ovr","start_ovr"),("PAC +","current_pac","start_pac"),("SHO +","current_sho","start_sho"),
+ ("PAS +","current_pas","start_pas"),("DRI +","current_dri","start_dri"),("DEF +","current_def","start_def"),("PHY +","current_phy","start_phy")]:
+  d[lab]=pd.to_numeric(d[cur],errors="coerce")-pd.to_numeric(d[start],errors="coerce")
+ d["Acquired"]=pd.to_datetime(d.acquired_at,utc=True,errors="coerce").dt.strftime("%d %b %Y")
+ d["Initial date"]=pd.to_datetime(d.history_start,utc=True,errors="coerce").dt.strftime("%d %b %Y")
+ last=pd.to_datetime(d.last_event_at,utc=True,errors="coerce")
+ now=pd.Timestamp.now(tz="UTC")
+ d["Days since activity"]=(now-last).dt.days
+ d["Status"]=d.apply(status,axis=1)
+ return d
 
-if st.button("Inspect player",type="primary"):
- try:
-  t=ab.token()
-  profile_raw=ab.get(f"/players/{int(pid)}",t)
-  roster_raw=ab.get("/players",t,{"ownerWalletAddress":wallet,"limit":1200})
-  roster=ab.arr(roster_raw)
-  rr=None
-  for x in roster:
-   p=ab.unwrap(x)
-   xid=p.get("id") or p.get("playerId") or p.get("playerID")
-   try:xid=int(xid)
-   except:continue
-   if xid==int(pid):
-    rr=x;break
+def status(r):
+ if r.get("tag")=="PRIORITY":return "⭐ PRIORITY"
+ if r.get("tag")=="WATCH":return "👀 WATCH"
+ if r.get("tag")=="DEVELOP":return "🌱 DEVELOP"
+ if r.get("source")=="NEW MINT / ORIGINAL" and (pd.isna(r.get("OVR +")) or r.get("OVR +")==0):return "🆕 NEW MINT"
+ if pd.notna(r.get("OVR +")) and r.get("OVR +")>0:return "🔥 DEVELOPING"
+ days=r.get("Days since activity")
+ if pd.notna(days) and days>=14:return "💤 DORMANT"
+ return "⚪ NORMAL"
 
-  st.success("API responses received.")
-  st.subheader("What our parser currently finds")
-  c1,c2=st.columns(2)
-  with c1:
-   st.write("Profile parser")
-   st.json(ab.player_meta_from_payload(profile_raw))
-  with c2:
-   st.write("Roster parser")
-   st.json(ab.player_meta_from_payload(rr) if rr is not None else {"error":"player not found in roster response"})
-
-  st.subheader("Raw /players/{id} response")
-  st.json(profile_raw,expanded=True)
-  st.subheader("This player's raw roster record")
-  st.json(rr if rr is not None else {"error":"player not found"},expanded=True)
-
-  # Flatten paths so field locations are obvious without guessing.
-  def flat(x,path="$",out=None):
-   out=[] if out is None else out
-   if isinstance(x,dict):
-    for k,v in x.items():flat(v,f"{path}.{k}",out)
-   elif isinstance(x,list):
-    for i,v in enumerate(x[:10]):flat(v,f"{path}[{i}]",out)
+df=load()
+if df.empty:
+ st.warning("No agency data is stored on this Streamlit instance yet.")
+ st.subheader("Build agency")
+ st.caption("This will rebuild the historical ownership baseline automatically. You do not need the old importer.")
+ if st.button("🚀 Build my agency",type="primary"):
+  bar=st.progress(0,text="Starting agency import…")
+  status=st.empty()
+  def importprog(done,total,chunk):
+   bar.progress(done/max(total,1),text=f"Building agency: {done}/{total}")
+   status.caption(f"Completed batch {chunk}. Progress is saved after every batch.")
+  try:
+   result=ab.finish_import(wallet,importprog,chunk_size=12,pause_seconds=8,max_chunks=40)
+   bar.empty();status.empty()
+   if result["complete"]:
+    st.success(f"Agency built: {result['analysed']}/{result['total']} players.")
+   elif result["rate_limited"]:
+    st.warning(f"MFL rate limit reached at {result['analysed']}/{result['total']}. Everything completed is saved. Wait a little, then press Continue agency build.")
    else:
-    out.append((path,x))
-   return out
-  st.subheader("Profile field paths")
-  st.dataframe([{"Path":p,"Value":str(v)} for p,v in flat(profile_raw)],use_container_width=True,hide_index=True)
-  st.subheader("Roster field paths")
-  st.dataframe([{"Path":p,"Value":str(v)} for p,v in flat(rr or {})],use_container_width=True,hide_index=True)
- except Exception as e:
-  st.error(f"{type(e).__name__}: {e}")
+    st.info(f"Build paused at {result['analysed']}/{result['total']}. Everything completed is saved; press the button again to continue.")
+   st.rerun()
+  except Exception as e:
+   bar.empty();status.empty();st.error(f"{type(e).__name__}: {e}")
+ st.stop()
+
+# compact controls
+# If the cache is only partially rebuilt, show a one-click continuation control.
+try:
+ live_total=len(ab.roster_ids(wallet,ab.token()))
+except Exception:
+ live_total=len(df)
+if len(df) < live_total:
+ st.info(f"Agency rebuild in progress: {len(df)}/{live_total} players stored.")
+ if st.button("🚀 Continue agency build",type="primary"):
+  bar=st.progress(0,text="Continuing agency import…")
+  status=st.empty()
+  def importprog(done,total,chunk):
+   bar.progress(done/max(total,1),text=f"Building agency: {done}/{total}")
+   status.caption(f"Completed batch {chunk}. Progress is saved after every batch.")
+  try:
+   result=ab.finish_import(wallet,importprog,chunk_size=12,pause_seconds=8,max_chunks=40)
+   bar.empty();status.empty()
+   if result["complete"]: st.success(f"Agency built: {result['analysed']}/{result['total']} players.")
+   elif result["rate_limited"]: st.warning(f"Rate limit reached at {result['analysed']}/{result['total']}. Saved safely; continue later.")
+   else: st.info(f"Paused at {result['analysed']}/{result['total']}. Saved safely.")
+   st.rerun()
+  except Exception as e:
+   bar.empty();status.empty();st.error(f"{type(e).__name__}: {e}")
+
+top1,top2=st.columns([1,4])
+with top1:
+ if st.button("🔄 Refresh 20 players",type="primary"):
+  bar=st.progress(0,text="Refreshing current data…")
+  def prog(n,total):bar.progress(min(1,n/max(1,20)),text=f"Refreshing {n}/20…")
+  done,total,errs=ab.refresh_current_v21(wallet,prog,20);bar.empty()
+  if errs:st.warning(f"Refreshed {done}; {len(errs)} issue(s).")
+  else:st.success(f"Refreshed {done} players.")
+  st.rerun()
+with top2:
+ st.caption("Age and position now use the confirmed MFL fields: metadata.age and metadata.positions. Club uses the confirmed contract/club data. Each refresh moves through the least-recently refreshed players.")
+
+df=load()
+m1,m2,m3,m4,m5=st.columns(5)
+m1.metric("Players",len(df));m2.metric("Improved OVR",int((df["OVR +"]>0).sum()))
+m3.metric("New / original",int((df.source=="NEW MINT / ORIGINAL").sum()))
+m4.metric("Bought",int((df.source=="BOUGHT").sum()))
+m5.metric("Priority",int((df.tag=="PRIORITY").sum()))
+
+tabs=st.tabs(["🏆 Development","🎮 Needs Games","🆕 New Mints","⭐ My List","👥 Agency"])
+with tabs[0]:
+ st.subheader("Top developers")
+ v=df[df["OVR +"]>0].sort_values(["OVR +","current_ovr"],ascending=False)
+ st.dataframe(v[["Status","player_name","age","position","start_ovr","current_ovr","OVR +","PAC +","SHO +","PAS +","DRI +","DEF +","PHY +"]],
+  hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","start_ovr":"Start","current_ovr":"Current"})
+with tabs[1]:
+ st.subheader("Needs games / attention")
+ st.caption("This becomes more accurate as players are refreshed. 'Match events' currently comes directly from MFL progression-history events labelled MATCH.")
+ need=df.copy()
+ need["match_events"]=pd.to_numeric(need.match_events,errors="coerce")
+ need=need[(need.tag.isin(["DEVELOP","PRIORITY","WATCH"])) | (need.source=="NEW MINT / ORIGINAL")]
+ need=need.sort_values(["match_events","Days since activity","age"],ascending=[True,False,True],na_position="last")
+ st.dataframe(need[["Status","player_name","age","current_ovr","OVR +","match_events","Days since activity","tag","note"]],
+  hide_index=True,use_container_width=True,column_config={"player_name":"Player","current_ovr":"OVR","match_events":"Match events"})
+with tabs[2]:
+ mint=df[df.source=="NEW MINT / ORIGINAL"].sort_values(["OVR +","current_ovr"],ascending=False)
+ st.dataframe(mint[["Status","player_name","age","Initial date","start_ovr","current_ovr","OVR +","match_events","Days since activity"]],
+  hide_index=True,use_container_width=True,column_config={"player_name":"Player","start_ovr":"Initial","current_ovr":"Current"})
+with tabs[3]:
+ mine=df[df.tag!="NORMAL"]
+ if mine.empty:st.info("No manual development tags yet.")
+ else:st.dataframe(mine[["tag","player_name","age","current_ovr","OVR +","match_events","note"]],hide_index=True,use_container_width=True)
+ st.subheader("Player status")
+ opts={f"{r.player_name} · {int(r.player_id)}":int(r.player_id) for _,r in df.sort_values("player_name").iterrows()}
+ who=st.selectbox("Player",opts);ex=df[df.player_id==opts[who]].iloc[0]
+ tags=["NORMAL","DEVELOP","PRIORITY","WATCH"];tag=st.selectbox("Tag",tags,index=tags.index(ex.tag) if ex.tag in tags else 0)
+ note=st.text_input("Note",value=ex.note)
+ if st.button("Save"):
+  c.execute("""INSERT INTO tags(wallet,player_id,tag,note) VALUES(?,?,?,?) ON CONFLICT(wallet,player_id)
+  DO UPDATE SET tag=excluded.tag,note=excluded.note""",(wallet,opts[who],tag,note));c.commit();st.rerun()
+with tabs[4]:
+ q=st.text_input("Search")
+ v=df if not q else df[df.player_name.str.contains(q,case=False,na=False)]
+ sort=st.selectbox("Sort",["OVR gain","OVR","Age","Name"])
+ if sort=="OVR gain":v=v.sort_values(["OVR +","current_ovr"],ascending=False,na_position="last")
+ elif sort=="OVR":v=v.sort_values("current_ovr",ascending=False)
+ elif sort=="Age":v=v.sort_values("age",na_position="last")
+ else:v=v.sort_values("player_name")
+ st.dataframe(v[["Status","player_name","age","position","club","source","Acquired","start_ovr","current_ovr","OVR +","match_events","Days since activity"]],
+  hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","club":"Club","source":"Ownership","current_ovr":"OVR","start_ovr":"Start","match_events":"Match events"})
+
+st.caption("Ownership development baselines: BOUGHT = verified purchase into this wallet; NEW / ORIGINAL = MFL INITIAL player state. Match-event counts are based on MFL progression history and are not yet restricted to official league fixtures.")
+c.close()
