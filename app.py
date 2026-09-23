@@ -7,7 +7,7 @@ except Exception:pass
 st.title("🌱 MFL Agency Development")
 st.caption("How much have your players developed while you owned them?")
 wallet=st.text_input("Dapper wallet address",value="0x65cc0e72dd71ad80").strip()
-st.info("API-safe mode: each click analyses up to 10 new players and saves the result. This avoids hammering MFL's rate limit.")
+st.info("API-safe mode: the next batch prioritises the known purchased-player test (Arnt Jenssen, 374865), then analyses other uncached players. This lets us validate purchase-time development before scanning the whole agency.")
 if wallet and st.button("Analyse next batch",type="primary"):
  bar=st.progress(0,text="Loading a small batch of ownership + progression history…")
  def prog(n,total):bar.progress(n/max(total,1),text=f"Analysing this batch… {n}/{total}")

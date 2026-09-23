@@ -148,7 +148,11 @@ def sync(wallet,progress=None,batch_size=10):
  ids=list(dict.fromkeys(pid(x) for x in roster(wallet,t)))
  c=db();init(c)
  cached={r["player_id"]:r for r in c.execute("SELECT * FROM ownership_v65 WHERE wallet=?",(wallet,))}
- todo=[x for x in ids if x not in cached][:batch_size]
+ uncached=[x for x in ids if x not in cached]
+ # Validation priority: known purchased player Arnt Jenssen. This lets us verify
+ # purchase-date baseline logic before spending requests on the rest of the agency.
+ priority=[374865] if 374865 in uncached else []
+ todo=(priority+[x for x in uncached if x not in priority])[:batch_size]
  results=[];errors=[]
  for n,x in enumerate(todo,1):
   try:results.append(analyse(x,wallet,t))
