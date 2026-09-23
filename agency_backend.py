@@ -398,3 +398,39 @@ def metadata_counts(wallet):
  FROM player_meta WHERE wallet=?""",(wallet.strip().lower(),)).fetchone()
  c.close()
  return dict(r) if r else {"total":0,"ages":0,"positions":0,"clubs":0}
+
+def get_fast(path,t,params=None,timeout=12):
+ r=requests.get(BASE+path,headers=ah(t),params=params,timeout=timeout)
+ if r.status_code==429:
+  retry=r.headers.get("Retry-After")
+  raise RuntimeError(f"MFL_RATE_LIMITED|{retry or ''}")
+ if not r.ok:
+  raise RuntimeError(f"MFL {r.status_code}: {r.text[:180]}")
+ return r.json()
+
+def fill_metadata_fast(wallet):
+ """One roster call, no exponential waiting. Returns immediately on 429."""
+ wallet=wallet.strip().lower();t=token()
+ raw=arr(get_fast("/players",t,{"ownerWalletAddress":wallet,"limit":1200},timeout=12))
+ c=db();init(c);ensure_v2(c);updated=0
+ for item in raw:
+  p=unwrap(item)
+  pid=p.get("id") or p.get("playerId") or p.get("playerID")
+  try:pid=int(pid)
+  except:continue
+  meta=player_meta_from_payload(p)
+  c.execute("""INSERT INTO player_meta(wallet,player_id,age,position,club) VALUES(?,?,?,?,?)
+   ON CONFLICT(wallet,player_id) DO UPDATE SET
+   age=COALESCE(excluded.age,player_meta.age),
+   position=COALESCE(excluded.position,player_meta.position),
+   club=COALESCE(excluded.club,player_meta.club)""",
+   (wallet,pid,meta.get("age"),meta.get("position"),meta.get("club")))
+  updated+=1
+ c.commit()
+ counts=c.execute("""SELECT
+  SUM(CASE WHEN age IS NOT NULL THEN 1 ELSE 0 END) ages,
+  SUM(CASE WHEN position IS NOT NULL AND position<>'' THEN 1 ELSE 0 END) positions,
+  SUM(CASE WHEN club IS NOT NULL AND club<>'' THEN 1 ELSE 0 END) clubs
+  FROM player_meta WHERE wallet=?""",(wallet,)).fetchone()
+ c.close()
+ return updated,dict(counts)

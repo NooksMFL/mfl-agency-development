@@ -99,13 +99,20 @@ with top1:
  if st.button("⚡ Fill age / position / club",type="primary"):
   try:
    with st.spinner("Reading current agency roster…"):
-    updated=ab.fill_metadata_from_roster(wallet)
-   st.success(f"Metadata loaded for {updated} roster players from one MFL roster request.")
+    updated,counts=ab.fill_metadata_fast(wallet)
+   st.success(f"Roster read successfully: {updated} players · Age {counts.get('ages',0)} · Position {counts.get('positions',0)} · Club {counts.get('clubs',0)}")
    st.rerun()
-  except Exception as e:st.error(f"{type(e).__name__}: {e}")
+  except Exception as e:
+   msg=str(e)
+   if msg.startswith("MFL_RATE_LIMITED"):
+    retry=msg.split("|",1)[1] if "|" in msg else ""
+    st.warning("MFL is rate-limiting the roster request right now. Nothing has been lost. Try this button again later." + (f" Retry-After: {retry}s." if retry else ""))
+   elif "timed out" in msg.lower() or "timeout" in msg.lower():
+    st.warning("MFL did not answer within 12 seconds. Nothing has been changed; try again later.")
+   else: st.error(f"{type(e).__name__}: {e}")
 with top2:
  mc=ab.metadata_counts(wallet)
- st.caption(f"Metadata stored — Age: {mc.get('ages',0)} · Position: {mc.get('positions',0)} · Club: {mc.get('clubs',0)}. This uses the bulk roster response instead of opening every player individually.")
+ st.caption(f"Already stored — Age: {mc.get('ages',0)} · Position: {mc.get('positions',0)} · Club: {mc.get('clubs',0)}. Existing metadata stays saved even if MFL rejects a new request.")
 
 with st.expander("Current stats & activity refresh"):
  st.caption("This is the slower per-player job. It is optional for metadata and can be resumed safely in small batches.")
