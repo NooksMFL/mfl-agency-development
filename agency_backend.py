@@ -545,3 +545,31 @@ def agency_v28(wallet):
   d["ovr_gain"]=(d["current_ovr"]-d["start_ovr"]) if d.get("current_ovr") is not None and d.get("start_ovr") is not None else None
   out.append(d)
  return out
+
+def refresh_unscanned_activity_batch(wallet,limit=10):
+ """Scan only players with no v2.8 activity row yet; never cycles back automatically."""
+ wallet=wallet.strip().lower(); t=token()
+ c=db();init(c);ensure_v2(c);ensure_activity_v28(c)
+ rows=c.execute("""SELECT o.player_id,o.player_name
+ FROM ownership_v65 o
+ LEFT JOIN ownership_activity_v28 a ON a.wallet=o.wallet AND a.player_id=o.player_id
+ WHERE o.wallet=? AND a.player_id IS NULL
+ ORDER BY o.player_name ASC LIMIT ?""",(wallet,int(limit))).fetchall()
+ c.close()
+ done=[];stopped=None
+ for r in rows:
+  try:
+   n,last=refresh_owned_activity_one(wallet,r["player_id"],t)
+   done.append({"player_id":r["player_id"],"player_name":r["player_name"],
+                "match_events_owned":n,"last_match_at":last})
+   time.sleep(1.0)
+  except Exception as e:
+   if "429" in str(e) or "RATE_LIMIT" in str(e):
+    stopped=str(e);break
+   done.append({"player_id":r["player_id"],"player_name":r["player_name"],"error":str(e)})
+ return done,stopped
+
+def reset_activity_scan(wallet):
+ wallet=wallet.strip().lower();c=db();init(c);ensure_activity_v28(c)
+ c.execute("DELETE FROM ownership_activity_v28 WHERE wallet=?",(wallet,))
+ c.commit();c.close()

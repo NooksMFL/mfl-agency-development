@@ -173,25 +173,34 @@ with st.expander("🛡️ Backup & diagnostics"):
 
 ac=ab.activity_counts(wallet)
 st.markdown("### 🎮 Ownership match activity")
-st.caption(f"Scanned {ac.get('scanned',0)} / {len(df)} players. MATCH means an MFL match-progression event, not yet a verified official appearance.")
-ca,cb=st.columns([1,3])
+scanned=int(ac.get("scanned") or 0); total=len(df); remaining=max(0,total-scanned)
+st.progress((scanned/total) if total else 0.0,text=f"{scanned} / {total} players scanned · {remaining} remaining")
+st.caption("MATCH means an MFL match-progression event during the current ownership spell, not yet a verified official appearance.")
+ca,cb,cc=st.columns([1,1,3])
 with ca:
- if st.button("Scan next 10 activity"):
+ batch=st.selectbox("Batch size",[5,10,15],index=1,label_visibility="collapsed")
+with cb:
+ if st.button(f"Scan next {batch}",use_container_width=True,disabled=(remaining==0)):
   try:
-   with st.spinner("Reading 10 progression histories…"):
-    done,stopped=ab.refresh_owned_activity_batch(wallet,10)
+   with st.spinner(f"Reading up to {batch} unscanned progression histories…"):
+    done,stopped=ab.refresh_unscanned_activity_batch(wallet,batch)
    good=sum(1 for x in done if "error" not in x)
    errors=[x for x in done if "error" in x]
    if stopped:
-    st.warning(f"Saved {good} players, then MFL rate-limited the scan. Wait for the cooldown and press again.")
+    st.warning(f"Saved {good} player(s), then MFL rate-limited the scan. Nothing completed was lost.")
    elif errors:
-    st.error(f"Saved {good} players; {len(errors)} failed. First error: {errors[0].get('error')}")
+    st.error(f"Saved {good}; {len(errors)} failed. First error: {errors[0].get('error')}")
+   elif good:
+    st.success(f"Saved activity for {good} new player(s).")
    else:
-    st.success(f"Saved activity for {good} players.")
+    st.info("No unscanned players remain.")
    st.rerun()
   except Exception as e: st.error(f"{type(e).__name__}: {e}")
-with cb:
- st.caption("Safe/resumable: each player is saved immediately. Repeated presses continue with the least-recently scanned players.")
+with cc:
+ if remaining:
+  st.caption("Resumable queue: this now scans only players not already completed. It will not loop back over earlier players.")
+ else:
+  st.success("Activity scan complete for the current agency.")
 
 m1,m2,m3,m4,m5=st.columns(5)
 activity_df=pd.DataFrame(ab.agency_v28(wallet))
@@ -218,11 +227,26 @@ if not df.empty and not activity_df.empty:
   # Existing `Days since activity` was based on ANY progression event (training etc.).
   # Needs Games must instead use the last ownership-spell MATCH event.
   df["Days since activity"]=df["days_since_match"]
+ # Friendly activity display values while retaining numeric source columns.
+ scanned_mask=df["activity_scanned_at"].notna() if "activity_scanned_at" in df.columns else pd.Series(False,index=df.index)
+ if "Match events" in df.columns:
+  df["Match activity"]=df["Match events"].apply(lambda x: "—" if pd.isna(x) else str(int(x)))
+ if "Days since activity" in df.columns:
+  df["Last match"]=df.apply(
+   lambda r: ("Not scanned" if not bool(scanned_mask.loc[r.name])
+              else ("Never" if pd.isna(r.get("Days since activity"))
+                    else ("Today" if int(r.get("Days since activity"))==0
+                          else f"{int(r.get('Days since activity'))} days ago"))),axis=1)
 m1.metric("Players",len(df));m2.metric("Improved OVR",int((df["OVR +"]>0).sum()))
 m3.metric("New / original",int((df.source=="NEW MINT / ORIGINAL").sum()))
 m4.metric("Bought",int((df.source=="BOUGHT").sum()))
 m5.metric("Priority",int((df.tag=="PRIORITY").sum()))
 
+# Needs-games priority: scanned players with no MATCH activity first, then oldest last MATCH.
+if not df.empty:
+ df["_needs_scanned"]=df["activity_scanned_at"].notna() if "activity_scanned_at" in df.columns else False
+ df["_needs_never"]=df["_needs_scanned"] & df["match_events_owned"].fillna(0).eq(0) if "match_events_owned" in df.columns else False
+ df["_needs_days"]=df["days_since_match"].fillna(10**6) if "days_since_match" in df.columns else 0
 tabs=st.tabs(["🏆 Development","🎮 Needs Games","🆕 New Mints","⭐ My List","👥 Agency"])
 with tabs[0]:
  st.subheader("Top developers")
