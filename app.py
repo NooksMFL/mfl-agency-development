@@ -282,14 +282,109 @@ with tabs[0]:
  st.dataframe(v[["Status","player_name","age","position","start_ovr","current_ovr","OVR +","PAC +","SHO +","PAS +","DRI +","DEF +","PHY +"]],
   hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","start_ovr":"Start","current_ovr":"Current"})
 with tabs[1]:
- st.subheader("Needs games / attention")
- st.caption("Only scanned players have match-activity data. Match events are MFL progression-history events labelled MATCH during the current ownership spell; Days since activity means days since the latest such MATCH event.")
- need=df.copy()
- need["match_events"]=pd.to_numeric(need.match_events,errors="coerce")
- need=need[(need.tag.isin(["DEVELOP","PRIORITY","WATCH"])) | (need.source=="NEW MINT / ORIGINAL")]
- need=need.sort_values(["match_events","Days since activity","age"],ascending=[True,False,True],na_position="last")
- st.dataframe(need[["Status","player_name","age","current_ovr","OVR +","match_events","Days since activity","tag","note"]],
-  hide_index=True,use_container_width=True,column_config={"player_name":"Player","current_ovr":"OVR","match_events":"Match events"})
+ st.subheader("🎮 Needs Games")
+ st.caption("Management view based on MFL MATCH-progression activity during the current ownership spell. MATCH is still activity evidence, not a verified official appearance count.")
+
+ ng=df.copy()
+ if ng.empty:
+  st.info("No agency data available.")
+ else:
+  # Normalize numeric fields used by the manager view.
+  for c in ["age","OVR","OVR +","match_events_owned","days_since_match"]:
+   if c in ng.columns: ng[c]=pd.to_numeric(ng[c],errors="coerce")
+
+  scanned=ng["activity_scanned_at"].notna() if "activity_scanned_at" in ng.columns else pd.Series(False,index=ng.index)
+  matches=ng["match_events_owned"] if "match_events_owned" in ng.columns else pd.Series(float("nan"),index=ng.index)
+  days=ng["days_since_match"] if "days_since_match" in ng.columns else pd.Series(float("nan"),index=ng.index)
+
+  def attention_reason(i):
+   if not bool(scanned.loc[i]): return "NOT SCANNED"
+   m=matches.loc[i]
+   d=days.loc[i]
+   age=ng.at[i,"age"] if "age" in ng.columns else None
+   status=str(ng.at[i,"Status"]) if "Status" in ng.columns else ""
+   tag=str(ng.at[i,"tag"]).upper() if "tag" in ng.columns and pd.notna(ng.at[i,"tag"]) else "NORMAL"
+   if tag=="PRIORITY": return "⭐ PRIORITY"
+   if pd.isna(m) or int(m)==0: return "🚨 NEVER MATCH ACTIVE"
+   if pd.notna(d) and d>=30: return "🔴 30+ DAYS"
+   if pd.notna(d) and d>=14: return "🟠 14+ DAYS"
+   if "NEW MINT" in status and pd.notna(age) and age<=23: return "🆕 YOUNG NEW MINT"
+   if tag in ("DEVELOP","WATCH"): return f"🏷️ {tag}"
+   return "🟢 RECENT"
+
+  ng["Attention"]=pd.Series({i:attention_reason(i) for i in ng.index})
+  priority_order={"⭐ PRIORITY":0,"🚨 NEVER MATCH ACTIVE":1,"🔴 30+ DAYS":2,
+                  "🟠 14+ DAYS":3,"🆕 YOUNG NEW MINT":4,"🏷️ DEVELOP":5,
+                  "🏷️ WATCH":6,"🟢 RECENT":7,"NOT SCANNED":8}
+  ng["_attention_order"]=ng["Attention"].map(priority_order).fillna(9)
+
+  c1,c2,c3,c4=st.columns(4)
+  c1.metric("Never match active",int(((scanned)&(matches.fillna(0)==0)).sum()))
+  c2.metric("30+ days",int(((scanned)&(days.fillna(-1)>=30)).sum()))
+  c3.metric("14–29 days",int(((scanned)&(days.fillna(-1)>=14)&(days.fillna(-1)<30)).sum()))
+  c4.metric("Recent <14 days",int(((scanned)&(days.fillna(10**6)<14)).sum()))
+
+  st.markdown("#### Filters")
+  f1,f2,f3,f4=st.columns(4)
+  with f1:
+   attention_options=["All"]+[x for x in priority_order if x in set(ng["Attention"])]
+   att=st.selectbox("Attention",attention_options)
+  with f2:
+   max_age=int(ng["age"].dropna().max()) if "age" in ng.columns and ng["age"].notna().any() else 50
+   age_max=st.slider("Maximum age",16,max(16,max_age),min(30,max(16,max_age)))
+  with f3:
+   positions=sorted({p.strip() for v in ng.get("Position",pd.Series(dtype=str)).dropna().astype(str) for p in v.split("/") if p.strip()})
+   pos=st.selectbox("Position",["All"]+positions)
+  with f4:
+   ownership=st.selectbox("Ownership",["All","BOUGHT","NEW MINT / ORIGINAL"])
+
+  f5,f6,f7=st.columns(3)
+  with f5:
+   clubs=sorted(ng["Club"].dropna().astype(str).unique().tolist()) if "Club" in ng.columns else []
+   club=st.selectbox("Club",["All"]+clubs)
+  with f6:
+   tag_options=["All"]+sorted(ng["tag"].dropna().astype(str).unique().tolist()) if "tag" in ng.columns else ["All"]
+   tag_filter=st.selectbox("Tag",tag_options)
+  with f7:
+   sort_choice=st.selectbox("Sort by",["Needs attention","Longest since match","Fewest match events","Youngest","OVR gain"])
+
+  view=ng.copy()
+  if att!="All": view=view[view["Attention"]==att]
+  if "age" in view.columns: view=view[(view["age"].isna())|(view["age"]<=age_max)]
+  if pos!="All" and "Position" in view.columns:
+   view=view[view["Position"].fillna("").astype(str).apply(lambda x: pos in [p.strip() for p in x.split("/")])]
+  if ownership!="All" and "Ownership" in view.columns: view=view[view["Ownership"]==ownership]
+  if club!="All" and "Club" in view.columns: view=view[view["Club"]==club]
+  if tag_filter!="All" and "tag" in view.columns: view=view[view["tag"]==tag_filter]
+
+  if sort_choice=="Needs attention":
+   view=view.sort_values(["_attention_order","days_since_match","age"],ascending=[True,False,True],na_position="last")
+  elif sort_choice=="Longest since match":
+   view=view.sort_values("days_since_match",ascending=False,na_position="last")
+  elif sort_choice=="Fewest match events":
+   view=view.sort_values(["match_events_owned","days_since_match"],ascending=[True,False],na_position="last")
+  elif sort_choice=="Youngest":
+   view=view.sort_values(["age","days_since_match"],ascending=[True,False],na_position="last")
+  elif sort_choice=="OVR gain" and "OVR +" in view.columns:
+   view=view.sort_values("OVR +",ascending=False,na_position="last")
+
+  st.markdown(f"#### Players requiring review · {len(view)}")
+  # Friendly presentation values.
+  view["Match activity"]=view.apply(
+   lambda r: "Not scanned" if pd.isna(r.get("activity_scanned_at"))
+   else ("0 · Never" if pd.isna(r.get("match_events_owned")) or int(r.get("match_events_owned"))==0
+         else f"{int(r.get('match_events_owned'))}"),axis=1)
+  view["Last match"]=view.apply(
+   lambda r: "Not scanned" if pd.isna(r.get("activity_scanned_at"))
+   else ("Never" if pd.isna(r.get("days_since_match"))
+         else ("Today" if int(r.get("days_since_match"))==0 else f"{int(r.get('days_since_match'))} days ago")),axis=1)
+
+  cols=["Attention","Status","Player","age","Position","Club","OVR","OVR +",
+        "Match activity","Last match","Ownership","tag","note"]
+  cols=[c for c in cols if c in view.columns]
+  st.dataframe(view[cols],use_container_width=True,hide_index=True,height=520)
+
+  st.caption("Attention categories are workflow flags, not player-quality ratings. 'Never' means no MFL MATCH progression event was found from the current ownership baseline onward.")
 with tabs[2]:
  mint=df[df.source=="NEW MINT / ORIGINAL"].sort_values(["OVR +","current_ovr"],ascending=False)
  st.dataframe(mint[["Status","player_name","age","Initial date","start_ovr","current_ovr","OVR +","match_events","Days since activity"]],
