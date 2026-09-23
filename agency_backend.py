@@ -434,3 +434,15 @@ def fill_metadata_fast(wallet):
   FROM player_meta WHERE wallet=?""",(wallet,)).fetchone()
  c.close()
  return updated,dict(counts)
+
+def inspect_activity_events(player_id):
+ """Fetch one player's progression history and summarize reasonType values."""
+ t=token(); events=exp_history(int(player_id),t)
+ reasons={}
+ for e in events:
+  r=event_reason(e) or "UNKNOWN"
+  reasons[r]=reasons.get(r,0)+1
+ matches=[e for e in events if event_reason(e)=="MATCH"]
+ return {"event_count":len(events),"reasons":reasons,"match_count":len(matches),
+         "sample_match":matches[-1] if matches else None,
+         "sample_events":events[-5:] if events else []}

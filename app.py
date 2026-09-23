@@ -1,4 +1,4 @@
-import os
+import os, shutil, tempfile
 from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
@@ -127,6 +127,50 @@ with st.expander("Current stats & activity refresh"):
   except Exception as e:bar.empty();st.error(f"{type(e).__name__}: {e}")
 
 df=load()
+
+with st.expander("🛡️ Backup & diagnostics"):
+ st.caption("Streamlit Community Cloud does not guarantee local SQLite persistence. Download a backup after major imports/refreshes so the 352-player history can be restored without rebuilding.")
+ b1,b2=st.columns(2)
+ with b1:
+  try:
+   with open(ab.DB,"rb") as fh:
+    st.download_button("⬇️ Download agency database backup",data=fh.read(),file_name="agency_development_backup.db",mime="application/octet-stream")
+  except Exception as e: st.caption(f"Backup unavailable: {e}")
+ with b2:
+  uploaded=st.file_uploader("Restore database backup",type=["db"],help="Use a backup created by this dashboard.")
+  if uploaded is not None and st.button("Restore uploaded backup"):
+   try:
+    # Validate as SQLite before replacing live DB.
+    import sqlite3
+    tmp=tempfile.NamedTemporaryFile(delete=False,suffix=".db");tmp.write(uploaded.getvalue());tmp.close()
+    test=sqlite3.connect(tmp.name);test.execute("PRAGMA quick_check").fetchone();test.close()
+    shutil.copyfile(tmp.name,ab.DB)
+    st.success("Database restored. Reloading dashboard…");st.rerun()
+   except Exception as e: st.error(f"Backup could not be restored: {e}")
+
+ st.divider()
+ st.markdown("**🎮 Inspect MFL activity for one player**")
+ st.caption("This lets us verify exactly what MFL labels as MATCH before we use it as 'games played'. It makes one progression-history request.")
+ choices={f"{r.player_name} · {int(r.player_id)}":int(r.player_id) for _,r in df.sort_values("player_name").iterrows()}
+ inspect_name=st.selectbox("Player to inspect",choices,key="activity_inspect")
+ if st.button("Inspect activity"):
+  try:
+   with st.spinner("Reading progression history…"):
+    diag=ab.inspect_activity_events(choices[inspect_name])
+   st.write(f"Events: **{diag['event_count']}** · MATCH-labelled: **{diag['match_count']}**")
+   st.write("Reason types:",diag["reasons"])
+   if diag["sample_match"] is not None:
+    st.markdown("**Raw MATCH event sample**")
+    st.json(diag["sample_match"],expanded=True)
+   else:
+    st.info("No MATCH-labelled progression event was returned for this player.")
+    st.markdown("**Latest raw progression events**")
+    st.json(diag["sample_events"],expanded=True)
+  except Exception as e:
+   msg=str(e)
+   if "429" in msg or "RATE_LIMIT" in msg: st.warning("MFL is rate-limiting this request. Try again after the cooldown.")
+   else: st.error(f"{type(e).__name__}: {e}")
+
 m1,m2,m3,m4,m5=st.columns(5)
 m1.metric("Players",len(df));m2.metric("Improved OVR",int((df["OVR +"]>0).sum()))
 m3.metric("New / original",int((df.source=="NEW MINT / ORIGINAL").sum()))
