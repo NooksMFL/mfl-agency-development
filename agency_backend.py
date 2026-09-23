@@ -10,12 +10,14 @@ STATS=("overall","pace","shooting","passing","dribbling","defense","physical")
 def db():
  c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
 def init(c):
- c.executescript("""CREATE TABLE IF NOT EXISTS ownership_v6(
- wallet TEXT,player_id INTEGER,player_name TEXT,source TEXT,acquired_at TEXT,
+ c.executescript("""CREATE TABLE IF NOT EXISTS ownership_v63(
+ wallet TEXT,player_id INTEGER,player_name TEXT,source TEXT,confidence TEXT,acquired_at TEXT,history_start TEXT,
  start_ovr REAL,start_pac REAL,start_sho REAL,start_pas REAL,start_dri REAL,start_def REAL,start_phy REAL,
  current_ovr REAL,current_pac REAL,current_sho REAL,current_pas REAL,current_dri REAL,current_def REAL,current_phy REAL,
- progression_owned INTEGER DEFAULT 0,last_progression TEXT,updated_at TEXT,PRIMARY KEY(wallet,player_id));
+ progression_owned INTEGER DEFAULT 0,last_progression TEXT,first_progression TEXT,event_count INTEGER DEFAULT 0,updated_at TEXT,
+ PRIMARY KEY(wallet,player_id));
  CREATE TABLE IF NOT EXISTS tags(wallet TEXT,player_id INTEGER,tag TEXT,note TEXT,PRIMARY KEY(wallet,player_id));"""); c.commit()
+
 def token():
  rt=os.getenv("MFL_REFRESH_TOKEN")
  if not rt: raise RuntimeError("MFL_REFRESH_TOKEN missing")
@@ -88,9 +90,10 @@ def acquire(sales,wallet):
  for e in sales:
   buyer=str(e.get("buyerAddress") or e.get("buyerWalletAddress") or "").lower()
   when=todt(e.get("purchaseDateTime") or e.get("createdAt") or e.get("date"))
-  if buyer==w and when:buys.append((when,e))
- if buys:return max(buys,key=lambda z:z[0])[0],"BOUGHT"
- return None,"PACKED / ORIGINAL / UNKNOWN"
+  status=str(e.get("status") or "").upper()
+  if buyer==w and when and (not status or status=="BOUGHT"):buys.append((when,e))
+ if buys:return max(buys,key=lambda z:z[0])[0],"BOUGHT","VERIFIED"
+ return None,"NO MARKET PURCHASE","UNVERIFIED"
 def event_values(e):
  vals=e.get("values") or e.get("attributes") or {}
  out={}
@@ -108,54 +111,65 @@ def reconstruct(exps,acq,current):
   when=todt(e.get("date") or e.get("createdAt") or e.get("timestamp"))
   if when:parsed.append((when,e))
  parsed.sort(key=lambda z:z[0])
- # If no marketplace acquisition exists, use earliest progression state as a conservative historical baseline.
- effective=acq or (parsed[0][0] if parsed else None)
- state={k:None for k in STATS}
- owned=0;last=None
- for when,e in parsed:
-  vals=event_values(e)
-  if effective and when<=effective:
-   for k,v in vals.items():state[k]=v
-  if effective and when>=effective:
-   owned+=1;last=when
- # If history doesn't expose a complete state, do not invent growth: fill only missing baseline from current.
- for k in STATS:
-  if state[k] is None:state[k]=current.get(k)
- return effective,state,owned,last
+ initials=[x for x in parsed if str(x[1].get("type") or x[1].get("eventType") or "").upper()=="INITIAL"]
+ if acq:
+  effective=acq; baseline_label="PURCHASE"
+ elif initials:
+  effective=initials[0][0]; baseline_label="INITIAL"
+ else:
+  effective=None; baseline_label="UNKNOWN"
+ state={k:None for k in STATS}; owned=0;last=None
+ if effective:
+  # Latest complete/partial state at or before the ownership anchor.
+  for when,e in parsed:
+   if when<=effective:
+    for k,v in event_values(e).items():state[k]=v
+   if when>=effective:
+    owned+=1;last=when
+ # Do not manufacture historical gains from today's profile.
+ complete=all(state[k] is not None for k in STATS)
+ if not complete:
+  return effective,None,owned,last,baseline_label,parsed
+ return effective,state,owned,last,baseline_label,parsed
+
 def analyse(pid,wallet,t):
- cur=profile(pid,t);sales=sale_history(pid,t);exps=exp_history(pid,t);acq,source=acquire(sales,wallet)
- effective,start,owned,last=reconstruct(exps,acq,cur)
- return pid,cur,source,effective,start,owned,last
-def sync(wallet,progress=None,batch_size=15):
+ cur=profile(pid,t);sales=sale_history(pid,t);exps=exp_history(pid,t);acq,source,confidence=acquire(sales,wallet)
+ effective,start,owned,last,baseline_label,parsed=reconstruct(exps,acq,cur)
+ # No marketplace purchase + INITIAL is evidence of an original/minted history, but not proof this wallet minted it.
+ if source=="NO MARKET PURCHASE" and baseline_label=="INITIAL":
+  source="POSSIBLE ORIGINAL / MINT"
+ if start is None:
+  start={k:None for k in STATS}
+ first=parsed[0][0] if parsed else None
+ return pid,cur,source,confidence,(acq if confidence=="VERIFIED" else None),effective,start,owned,last,first,len(parsed)
+def sync(wallet,progress=None,batch_size=10):
  wallet=wallet.strip().lower();t=token()
- # Retry-aware roster request happens only once per batch.
  ids=list(dict.fromkeys(pid(x) for x in roster(wallet,t)))
  c=db();init(c)
- cached={r["player_id"]:r for r in c.execute("SELECT * FROM ownership_v6 WHERE wallet=?",(wallet,))}
- # Historical ownership data is immutable enough to cache. Prioritise unseen players.
+ cached={r["player_id"]:r for r in c.execute("SELECT * FROM ownership_v63 WHERE wallet=?",(wallet,))}
  todo=[x for x in ids if x not in cached][:batch_size]
  results=[];errors=[]
  for n,x in enumerate(todo,1):
-  try:
-   results.append(analyse(x,wallet,t))
+  try:results.append(analyse(x,wallet,t))
   except Exception as e:
    errors.append((x,str(e)))
-   # If MFL says rate limited, stop this batch instead of hammering further.
-   if "rate-limit" in str(e).lower() or "429" in str(e):
-    break
+   if "rate-limit" in str(e).lower() or "429" in str(e):break
   if progress:progress(n,len(todo))
-  time.sleep(0.35)
+  time.sleep(0.45)
  now=datetime.now(timezone.utc).isoformat()
- for player_id,cur,source,acq,start,owned,last in results:
-  c.execute("""INSERT INTO ownership_v6 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  ON CONFLICT(wallet,player_id) DO UPDATE SET player_name=excluded.player_name,source=excluded.source,acquired_at=excluded.acquired_at,
-  start_ovr=excluded.start_ovr,start_pac=excluded.start_pac,start_sho=excluded.start_sho,start_pas=excluded.start_pas,start_dri=excluded.start_dri,start_def=excluded.start_def,start_phy=excluded.start_phy,
-  current_ovr=excluded.current_ovr,current_pac=excluded.current_pac,current_sho=excluded.current_sho,current_pas=excluded.current_pas,current_dri=excluded.current_dri,current_def=excluded.current_def,current_phy=excluded.current_phy,
-  progression_owned=excluded.progression_owned,last_progression=excluded.last_progression,updated_at=excluded.updated_at""",
-  (wallet,player_id,cur["name"],source,iso(acq),start["overall"],start["pace"],start["shooting"],start["passing"],start["dribbling"],start["defense"],start["physical"],
-   cur["overall"],cur["pace"],cur["shooting"],cur["passing"],cur["dribbling"],cur["defense"],cur["physical"],owned,iso(last),now))
+ for player_id,cur,source,confidence,acq,hstart,start,owned,last,first,event_count in results:
+  c.execute("""INSERT INTO ownership_v63 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(wallet,player_id) DO UPDATE SET player_name=excluded.player_name,source=excluded.source,confidence=excluded.confidence,
+  acquired_at=excluded.acquired_at,history_start=excluded.history_start,start_ovr=excluded.start_ovr,start_pac=excluded.start_pac,
+  start_sho=excluded.start_sho,start_pas=excluded.start_pas,start_dri=excluded.start_dri,start_def=excluded.start_def,start_phy=excluded.start_phy,
+  current_ovr=excluded.current_ovr,current_pac=excluded.current_pac,current_sho=excluded.current_sho,current_pas=excluded.current_pas,
+  current_dri=excluded.current_dri,current_def=excluded.current_def,current_phy=excluded.current_phy,progression_owned=excluded.progression_owned,
+  last_progression=excluded.last_progression,first_progression=excluded.first_progression,event_count=excluded.event_count,updated_at=excluded.updated_at""",
+  (wallet,player_id,cur["name"],source,confidence,iso(acq),iso(hstart),
+   start["overall"],start["pace"],start["shooting"],start["passing"],start["dribbling"],start["defense"],start["physical"],
+   cur["overall"],cur["pace"],cur["shooting"],cur["passing"],cur["dribbling"],cur["defense"],cur["physical"],owned,iso(last),iso(first),event_count,now))
  c.commit()
- analysed=c.execute("SELECT COUNT(*) FROM ownership_v6 WHERE wallet=?",(wallet,)).fetchone()[0]
+ analysed=c.execute("SELECT COUNT(*) FROM ownership_v63 WHERE wallet=?",(wallet,)).fetchone()[0]
  c.close()
  return len(ids),len(results),errors,analysed,len(todo)
 
