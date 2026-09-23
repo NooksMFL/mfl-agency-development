@@ -20,7 +20,7 @@ st.caption("Track how your MFL players develop while they are in your agency.")
 
 
 
-st.subheader("Load your agency")
+st.subheader("Your agency")
 st.write("Enter your **Dapper wallet address** below. You do not need to sign in or enter an MFL token.")
 
 wallet_input=st.text_input(
@@ -274,55 +274,6 @@ if remaining:
    st.info("Anything completed before the error is already saved. Press Finish activity scan again to resume.")
 
 
-with st.expander("🔎 Real match-history API diagnostic"):
- st.caption("MFL MATCH progression is not a reliable appearance count. Use this on a player you know has played; it tests first-party MFL routes only and does not alter the database.")
- probe_choices={f"{r.player_name} · {int(r.player_id)}":int(r.player_id) for _,r in df.sort_values("player_name").iterrows()}
- probe_name=st.selectbox("Known player who has played matches",probe_choices,key="match_api_probe")
- st.caption(f"Backend: {getattr(ab, 'APP_BACKEND_VERSION', 'older version loaded')}")
- if st.button("Probe match API"):
-  try:
-   if not hasattr(ab,"probe_match_endpoints"):
-    st.error("Streamlit is still running the older agency_backend.py. Confirm both files were replaced, then reboot the app.")
-    st.stop()
-   with st.spinner("Testing MFL match-history routes…"):
-    probe=ab.probe_match_endpoints(probe_choices[probe_name])
-   for result in probe:
-    status=result.get("status","error")
-    with st.expander(f"{status} · {result.get('path')}",expanded=(status==200)):
-     st.json(result,expanded=True)
-  except Exception as e:
-   st.error(f"{type(e).__name__}: {e}")
-
-
-with st.expander("🛠️ Advanced API diagnostics — testing only"):
- st.caption("We confirmed /matches/feed is real, but playerId is ignored. This tests likely query parameter names on that known route and shows only compact samples.")
- target_player=st.number_input("Target player ID",min_value=1,value=144031,step=1,key="target_feed_player")
- target_club=st.number_input("Known club ID (optional)",min_value=0,value=0,step=1,key="target_feed_club")
- target_squad=st.number_input("Known squad ID (optional)",min_value=0,value=0,step=1,key="target_feed_squad")
- if st.button("Test feed filters"):
-  try:
-   with st.spinner("Testing query parameters on /matches/feed…"):
-    feed_probe=ab.probe_match_feed_filters(int(target_player),int(target_club) or None,int(target_squad) or None)
-   st.json(feed_probe,expanded=True)
-  except Exception as e:
-   st.error(f"{type(e).__name__}: {e}")
-
-
-with st.expander("🛠️ Club-history diagnostic — testing only"):
- st.caption("MFL's public club pages definitely expose Latest Matches, Schedule and History. Enter a real club ID from an MFL club URL; squad ID is optional.")
- hist_club=st.number_input("Club ID from app.playmfl.com/clubs/…",min_value=1,value=8172,step=1,key="hist_club")
- hist_squad=st.number_input("Squad ID (optional)",min_value=0,value=0,step=1,key="hist_squad")
- if st.button("Probe club history"):
-  try:
-   with st.spinner("Testing club/squad history routes…"):
-    hist_probe=ab.probe_club_history(int(hist_club),int(hist_squad) or None)
-   for result in hist_probe:
-    status=result.get("status","error")
-    with st.expander(f"{status} · {result.get('path')} · {result.get('params')}",expanded=(status==200)):
-     st.json(result,expanded=True)
-  except Exception as e:
-   st.error(f"{type(e).__name__}: {e}")
-
 m1,m2,m3,m4,m5=st.columns(5)
 activity_df=pd.DataFrame(ab.agency_v28(wallet))
 if not df.empty and not activity_df.empty:
@@ -406,8 +357,8 @@ with tabs[1]:
    tag=str(ng.at[i,"tag"]).upper() if "tag" in ng.columns and pd.notna(ng.at[i,"tag"]) else "NORMAL"
    if tag=="PRIORITY": return "⭐ PRIORITY"
    if pd.isna(m) or int(m)==0:
-    if "NEW MINT" in status and pd.notna(age) and age<=23: return "🆕 NEW MINT · NO MATCH PROGRESSION"
-    return "⚠️ NO MATCH PROGRESSION"
+    if "NEW MINT" in status and pd.notna(age) and age<=23: return "🆕 NEW MINT · —"
+    return "—"
    if pd.notna(d) and d>=30: return "🔴 30+ DAYS"
    if pd.notna(d) and d>=14: return "🟠 14–29 DAYS"
    if tag=="DEVELOP": return "🏷️ DEVELOP"
@@ -415,15 +366,15 @@ with tabs[1]:
    return "🟢 RECENT"
 
   ng["Attention"]=pd.Series({i:attention_reason(i) for i in ng.index})
-  order={"⭐ PRIORITY":0,"🆕 NEW MINT · NO MATCH PROGRESSION":1,"⚠️ NO MATCH PROGRESSION":2,
+  order={"⭐ PRIORITY":0,"🆕 NEW MINT · —":1,"—":2,
          "🔴 30+ DAYS":3,"🟠 14–29 DAYS":4,"🏷️ DEVELOP":5,
          "👀 WATCH":6,"🟢 RECENT":7,"⚪ NOT SCANNED":8}
   ng["_attention_order"]=ng["Attention"].map(order).fillna(9)
 
   # Summary metrics.
   c1,c2,c3,c4,c5=st.columns(5)
-  c1.metric("New mints · no match",int((ng["Attention"]=="🆕 NEW MINT · NO MATCH PROGRESSION").sum()))
-  c2.metric("Other · no match",int((ng["Attention"]=="⚠️ NO MATCH PROGRESSION").sum()))
+  c1.metric("New mints · no match",int((ng["Attention"]=="🆕 NEW MINT · —").sum()))
+  c2.metric("Other · no match",int((ng["Attention"]=="—").sum()))
   c3.metric("30+ days",int((ng["Attention"]=="🔴 30+ DAYS").sum()))
   c4.metric("14–29 days",int((ng["Attention"]=="🟠 14–29 DAYS").sum()))
   c5.metric("Recent",int((ng["Attention"]=="🟢 RECENT").sum()))
@@ -432,7 +383,7 @@ with tabs[1]:
   q1,q2,q3,q4=st.columns(4)
   young_only=q1.toggle("23 & under",value=False)
   developing_only=q2.toggle("Developing only",value=False)
-  no_match_only=q3.toggle("No match progression",value=False)
+  no_match_only=q3.toggle("—",value=False)
   stale_only=q4.toggle("14+ days / never",value=False)
 
   with st.expander("More filters",expanded=False):
@@ -482,7 +433,7 @@ with tabs[1]:
 
   view["Match activity"]=view.apply(
    lambda r:"Not scanned" if pd.isna(r.get("activity_scanned_at"))
-   else ("0 · Never" if pd.isna(r.get("match_events_owned")) or int(r.get("match_events_owned"))==0
+   else ("—" if pd.isna(r.get("match_events_owned")) or int(r.get("match_events_owned"))==0
          else str(int(r.get("match_events_owned")))),axis=1)
   view["Last match"]=view.apply(
    lambda r:"Not scanned" if pd.isna(r.get("activity_scanned_at"))
