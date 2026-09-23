@@ -16,8 +16,43 @@ try:
 except Exception:pass
 
 st.title("🌱 MFL Agency Development")
-st.caption("Development management for your MFL agency.")
-wallet=st.text_input("Dapper wallet address",value="",label_visibility="collapsed").strip().lower()
+st.caption("Track how your MFL players develop while they are in your agency.")
+
+st.subheader("Load your agency")
+st.write("Enter your **Dapper wallet address** below. You do not need to sign in or enter an MFL token.")
+
+wallet_input=st.text_input(
+    "Dapper wallet address",
+    value=st.session_state.get("agency_wallet",""),
+    placeholder="0x…",
+    help="Use the Dapper wallet address that owns your MFL players.",
+).strip()
+
+load_wallet=st.button("🔎 Load my agency",type="primary")
+
+if load_wallet:
+    if not wallet_input:
+        st.error("Enter your Dapper wallet address first.")
+    elif not valid_wallet_address(wallet_input):
+        st.error("That doesn't look like a valid wallet address. It should begin with 0x.")
+    else:
+        st.session_state["agency_wallet"]=wallet_input.lower()
+        st.rerun()
+
+wallet=st.session_state.get("agency_wallet","").strip().lower()
+
+if not wallet:
+    st.info("Your agency will appear here after you enter your wallet address.")
+    st.stop()
+
+left_wallet,right_wallet=st.columns([4,1])
+with left_wallet:
+    st.caption(f"Loaded wallet: `{wallet}`")
+with right_wallet:
+    if st.button("Change wallet"):
+        st.session_state.pop("agency_wallet",None)
+        st.rerun()
+
 c=ab.db();ab.init(c);ab.ensure_v2(c)
 
 def load():
@@ -53,9 +88,9 @@ def status(r):
 
 df=load()
 if df.empty:
- st.warning("No agency data is stored on this Streamlit instance yet.")
+ st.info("This wallet has not been imported into the tracker yet.")
  st.subheader("Build agency")
- st.caption("This will rebuild the historical ownership baseline automatically. You do not need the old importer.")
+ st.caption("Build this agency from its current MFL roster and historical ownership data. Progress is saved after each batch.")
  if st.button("🚀 Build my agency",type="primary"):
   bar=st.progress(0,text="Starting agency import…")
   status=st.empty()

@@ -686,7 +686,7 @@ def probe_match_endpoints(player_id):
   except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
  return out
 
-APP_BACKEND_VERSION = "2.18"
+APP_BACKEND_VERSION = "2.18.1"
 
 def probe_match_feed_filters(player_id, club_id=None, squad_id=None):
  """Targeted diagnostic based on the confirmed /matches/feed route.
