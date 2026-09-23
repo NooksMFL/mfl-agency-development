@@ -1,21 +1,37 @@
-import os,streamlit as st
-import diagnostic_backend as d
-st.set_page_config(page_title="MFL Ownership Diagnostic",page_icon="🧪",layout="wide")
+import os,streamlit as st,pandas as pd
+import agency_backend as ab
+st.set_page_config(page_title="MFL Agency Development",page_icon="🌱",layout="wide")
 try:
  if "MFL_REFRESH_TOKEN" in st.secrets:os.environ["MFL_REFRESH_TOKEN"]=st.secrets["MFL_REFRESH_TOKEN"]
 except Exception:pass
-st.title("🧪 MFL Ownership / Acquisition Diagnostic")
-st.caption("v5.2 — acquisition diagnostic with MFL listing-feed limit corrected to 25.")
-wallet=st.text_input("Your Dapper wallet",value="0x65cc0e72dd71ad80")
-pid=st.number_input("Player ID",min_value=1,step=1,value=374865)
-if st.button("Check Arnt / this player",type="primary"):
+st.title("🌱 MFL Agency Development")
+st.caption("How much have your players developed while you owned them?")
+wallet=st.text_input("Dapper wallet address",value="0x65cc0e72dd71ad80").strip()
+if wallet and st.button("Analyse my agency",type="primary"):
+ bar=st.progress(0,text="Loading ownership + progression history…")
+ def prog(n,total):bar.progress(n/total,text=f"Analysing players… {n}/{total}")
  try:
-  with st.spinner("Checking MFL history…"):r=d.diagnose(int(pid),wallet)
-  st.success("MFL authentication and history requests succeeded.")
-  a,b,c=st.columns(3);a.metric("Sale events",len(r["sales"]));b.metric("Progression events",len(r["experiences"]));c.metric("Acquired by this wallet",r["acquired"])
-  st.write("**Last progression on/before acquisition:**",r["previous"])
-  st.write("**First progression after acquisition:**",r["next"])
-  st.subheader("Matched purchase event");st.json(r["event"] or {"result":"No matching purchase into this wallet found"})
-  with st.expander("Raw sale history"):st.json(r["sales"])
-  with st.expander("Raw progression history"):st.json(r["experiences"])
- except Exception as e:st.error(f"{type(e).__name__}: {e}")
+  total,ok,errors=ab.sync(wallet,prog);bar.empty();st.success(f"Analysed {ok} of {total} owned players.")
+  if errors:st.warning(f"{len(errors)} players could not be analysed this run.")
+ except Exception as e:bar.empty();st.error(f"{type(e).__name__}: {e}")
+if wallet:
+ c=ab.db();ab.init(c)
+ rows=c.execute("""SELECT o.*,COALESCE(t.tag,'NORMAL') tag,COALESCE(t.note,'') note FROM ownership_v6 o
+ LEFT JOIN tags t ON t.wallet=o.wallet AND t.player_id=o.player_id WHERE o.wallet=?""",(wallet.lower(),)).fetchall()
+ if rows:
+  df=pd.DataFrame([dict(r) for r in rows])
+  for label,cur,start in [("OVR +","current_ovr","start_ovr"),("PAC +","current_pac","start_pac"),("SHO +","current_sho","start_sho"),("PAS +","current_pas","start_pas"),("DRI +","current_dri","start_dri"),("DEF +","current_def","start_def"),("PHY +","current_phy","start_phy")]:df[label]=df[cur]-df[start]
+  df["Acquired"]=pd.to_datetime(df.acquired_at,utc=True,errors="coerce").dt.strftime("%d %b %Y")
+  a,b,c1,d=st.columns(4);a.metric("Players analysed",len(df));b.metric("Bought",int((df.source=="BOUGHT").sum()));c1.metric("Other / packed",int((df.source!="BOUGHT").sum()));d.metric("Tagged",int((df.tag!="NORMAL").sum()))
+  filt=st.segmented_control("View",["ALL","NEW MINT","DEVELOP","PRIORITY","WATCH","NORMAL"],default="ALL")
+  v=df if filt=="ALL" else df[df.tag==filt]
+  st.dataframe(v[["tag","player_name","source","Acquired","start_ovr","current_ovr","OVR +","PAC +","SHO +","PAS +","DRI +","DEF +","PHY +","progression_owned"]],
+   hide_index=True,use_container_width=True,column_config={"player_name":"Player","source":"Ownership","start_ovr":"Acquired OVR","current_ovr":"Current OVR","progression_owned":"Progressions with you"})
+  st.caption("BOUGHT = verified marketplace purchase into this wallet. PACKED / ORIGINAL / UNKNOWN currently uses the earliest available progression as a conservative baseline.")
+  st.subheader("🌱 Mark a prospect")
+  opts={f'{r.player_name} ({r.player_id})':int(r.player_id) for _,r in df.iterrows()};who=st.selectbox("Player",opts)
+  ex=df[df.player_id==opts[who]].iloc[0];tags=["NEW MINT","DEVELOP","PRIORITY","WATCH","NORMAL"]
+  tag=st.selectbox("Tag",tags,index=tags.index(ex.tag) if ex.tag in tags else 4);note=st.text_input("Private note",value=ex.note)
+  if st.button("Save tag"):
+   c.execute("INSERT INTO tags(wallet,player_id,tag,note) VALUES(?,?,?,?) ON CONFLICT(wallet,player_id) DO UPDATE SET tag=excluded.tag,note=excluded.note",(wallet.lower(),opts[who],tag,note));c.commit();st.rerun()
+ c.close()
