@@ -189,10 +189,23 @@ with cb:
  st.caption("Safe/resumable: each player is saved immediately. Repeated presses continue with the least-recently scanned players.")
 
 m1,m2,m3,m4,m5=st.columns(5)
-df=pd.DataFrame(ab.agency_v28(wallet))
-if not df.empty:
- df["match_events"]=df["match_events_owned"]
- df["days_since_activity"]=df["days_since_match"]
+activity_df=pd.DataFrame(ab.agency_v28(wallet))
+if not df.empty and not activity_df.empty:
+ activity_cols=["player_id","match_events_owned","last_match_at","days_since_match","activity_scanned_at"]
+ available=[c for c in activity_cols if c in activity_df.columns]
+ activity_small=activity_df[available].copy()
+ # `load()` is the dashboard's presentation dataframe; find its player-id label safely.
+ id_col=next((c for c in ["player_id","Player ID","ID"] if c in df.columns),None)
+ if id_col and "player_id" in activity_small.columns:
+  activity_small=activity_small.rename(columns={"player_id":id_col})
+  df=df.merge(activity_small,on=id_col,how="left")
+ else:
+  # Rows originate from the same ownership table; index fallback preserves old UI schema.
+  for c in ["match_events_owned","last_match_at","days_since_match","activity_scanned_at"]:
+   if c in activity_df.columns and len(activity_df)==len(df):
+    df[c]=activity_df[c].values
+ if "match_events_owned" in df.columns: df["Match events"]=df["match_events_owned"]
+ if "days_since_match" in df.columns: df["Days since activity"]=df["days_since_match"]
 m1.metric("Players",len(df));m2.metric("Improved OVR",int((df["OVR +"]>0).sum()))
 m3.metric("New / original",int((df.source=="NEW MINT / ORIGINAL").sum()))
 m4.metric("Bought",int((df.source=="BOUGHT").sum()))
