@@ -20,52 +20,6 @@ st.caption("Track how your MFL players develop while they are in your agency.")
 
 
 
-with st.expander("🕒 Refresh-token expiry check", expanded=True):
-    st.caption("Decoded locally from the JWT metadata. The token itself is never displayed or changed.")
-    meta=ab.refresh_token_metadata()
-    if not meta.get("present"):
-        st.error("MFL_REFRESH_TOKEN is missing from Streamlit Secrets.")
-    elif meta.get("shape") != "JWT-like":
-        st.info(f"Token is present but is not JWT-shaped. Length: {meta.get('length')}")
-    elif meta.get("decode_error"):
-        st.error(meta.get("decode_error"))
-    else:
-        claims=meta.get("claims",{})
-        st.write(f"**Issued:** {claims.get('iat_utc','Not supplied')}")
-        st.write(f"**Expires:** {claims.get('exp_utc','Not supplied')}")
-        expired=claims.get("expired")
-        if expired is True:
-            st.error("❌ EXPIRED — the stored refresh token has passed its expiry time.")
-        elif expired is False:
-            secs=max(0,claims.get("seconds_until_expiry",0))
-            st.success(f"✅ NOT EXPIRED — approximately {secs//3600} hours remain.")
-        else:
-            st.warning("The token has no expiry (`exp`) claim, so expiry cannot be determined from the JWT.")
-
-with st.expander("🔐 MFL authentication diagnostic"):
-    st.caption("Read-only test. It does not change your token or agency database, and token values are never displayed.")
-    if st.button("Run authentication diagnostic"):
-        with st.spinner("Testing MFL authentication safely…"):
-            auth_diag=ab.auth_diagnostic()
-        if auth_diag.get("refresh_token_present"):
-            st.write(f"Refresh token present: **Yes** · shape: **{auth_diag.get('refresh_token_shape')}** · length: **{auth_diag.get('refresh_token_length')}**")
-        else:
-            st.error("MFL_REFRESH_TOKEN is missing from Streamlit Secrets.")
-        for test in auth_diag.get("tests",[]):
-            status=test.get("status")
-            if status in (200,201):
-                st.success(f"{test.get('name')}: HTTP {status} — authentication accepted.")
-            elif status in (401,403):
-                st.error(f"{test.get('name')}: HTTP {status} — token/authentication rejected.")
-            elif status == 429:
-                st.warning(f"{test.get('name')}: HTTP 429 — rate limited. Retry-After: {test.get('retry_after')}")
-            elif status and status >= 500:
-                st.warning(f"{test.get('name')}: HTTP {status} — MFL server failed while processing the request.")
-            else:
-                st.info(f"{test.get('name')}: no conclusive HTTP result.")
-            with st.expander(f"Technical result · {test.get('name')}"):
-                st.json(test)
-
 st.subheader("Load your agency")
 st.write("Enter your **Dapper wallet address** below. You do not need to sign in or enter an MFL token.")
 
