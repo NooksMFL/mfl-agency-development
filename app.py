@@ -4,6 +4,12 @@ import pandas as pd
 import streamlit as st
 import agency_backend as ab
 
+
+
+def valid_wallet_address(value):
+    v=(value or "").strip()
+    return len(v) >= 10 and v.lower().startswith("0x") and all(ch in "0123456789abcdefABCDEF" for ch in v[2:])
+
 st.set_page_config(page_title="MFL Agency Development",page_icon="🌱",layout="wide")
 try:
  if "MFL_REFRESH_TOKEN" in st.secrets:os.environ["MFL_REFRESH_TOKEN"]=st.secrets["MFL_REFRESH_TOKEN"]
@@ -11,7 +17,7 @@ except Exception:pass
 
 st.title("🌱 MFL Agency Development")
 st.caption("Development management for your MFL agency.")
-wallet=st.text_input("Dapper wallet",value="0x65cc0e72dd71ad80",label_visibility="collapsed").strip().lower()
+wallet=st.text_input("Dapper wallet address",value="",label_visibility="collapsed").strip().lower()
 c=ab.db();ab.init(c);ab.ensure_v2(c)
 
 def load():
@@ -251,7 +257,7 @@ with st.expander("🔎 Real match-history API diagnostic"):
    st.error(f"{type(e).__name__}: {e}")
 
 
-with st.expander("🎯 Targeted /matches/feed filter diagnostic"):
+with st.expander("🛠️ Advanced API diagnostics — testing only"):
  st.caption("We confirmed /matches/feed is real, but playerId is ignored. This tests likely query parameter names on that known route and shows only compact samples.")
  target_player=st.number_input("Target player ID",min_value=1,value=144031,step=1,key="target_feed_player")
  target_club=st.number_input("Known club ID (optional)",min_value=0,value=0,step=1,key="target_feed_club")
@@ -265,7 +271,7 @@ with st.expander("🎯 Targeted /matches/feed filter diagnostic"):
    st.error(f"{type(e).__name__}: {e}")
 
 
-with st.expander("🏟️ Club history API diagnostic"):
+with st.expander("🛠️ Club-history diagnostic — testing only"):
  st.caption("MFL's public club pages definitely expose Latest Matches, Schedule and History. Enter a real club ID from an MFL club URL; squad ID is optional.")
  hist_club=st.number_input("Club ID from app.playmfl.com/clubs/…",min_value=1,value=8172,step=1,key="hist_club")
  hist_squad=st.number_input("Squad ID (optional)",min_value=0,value=0,step=1,key="hist_squad")
