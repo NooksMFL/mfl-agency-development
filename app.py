@@ -202,6 +202,34 @@ with cc:
  else:
   st.success("Activity scan complete for the current agency.")
 
+if remaining:
+ st.markdown("#### Or finish it automatically")
+ st.caption("One click works through every remaining unscanned player. If MFL rate-limits the app, it waits for the cooldown and continues. Keep this browser tab open while it runs.")
+ if st.button(f"🚀 Finish activity scan ({remaining} remaining)",type="primary",use_container_width=True):
+  bar=st.progress(scanned/total if total else 0.0,text=f"Starting from {scanned}/{total}…")
+  status=st.empty()
+  def _progress(done_run,total_run,name,wait):
+   overall=scanned+done_run
+   frac=min(1.0,overall/total) if total else 1.0
+   if wait and wait>0:
+    status.warning(f"MFL rate limit reached at {overall}/{total}. Waiting about {wait} seconds, then continuing automatically…")
+    bar.progress(frac,text=f"{overall} / {total} saved · cooling down…")
+   elif wait == -1:
+    status.warning(f"Skipped an error for {name}; continuing.")
+   else:
+    status.info(f"Saved {name} · {overall}/{total}")
+    bar.progress(frac,text=f"{overall} / {total} players scanned")
+  try:
+   result=ab.finish_activity_scan(wallet,_progress)
+   if result["errors"]:
+    st.warning(f"Finished this run with {result['completed']} newly saved and {len(result['errors'])} player error(s).")
+   else:
+    st.success(f"Activity scan complete — {scanned + result['completed']} / {total}.")
+   st.rerun()
+  except Exception as e:
+   st.error(f"{type(e).__name__}: {e}")
+   st.info("Anything completed before the error is already saved. Press Finish activity scan again to resume.")
+
 m1,m2,m3,m4,m5=st.columns(5)
 activity_df=pd.DataFrame(ab.agency_v28(wallet))
 if not df.empty and not activity_df.empty:

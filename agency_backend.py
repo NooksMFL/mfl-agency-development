@@ -573,3 +573,52 @@ def reset_activity_scan(wallet):
  wallet=wallet.strip().lower();c=db();init(c);ensure_activity_v28(c)
  c.execute("DELETE FROM ownership_activity_v28 WHERE wallet=?",(wallet,))
  c.commit();c.close()
+
+def unscanned_activity_count(wallet):
+ wallet=wallet.strip().lower();c=db();init(c);ensure_activity_v28(c)
+ n=c.execute("""SELECT COUNT(*) n FROM ownership_v65 o
+ LEFT JOIN ownership_activity_v28 a ON a.wallet=o.wallet AND a.player_id=o.player_id
+ WHERE o.wallet=? AND a.player_id IS NULL""",(wallet,)).fetchone()["n"]
+ c.close();return int(n)
+
+def finish_activity_scan(wallet, progress_callback=None, max_players=None):
+ """Process every currently-unscanned player sequentially.
+ On 429, obey Retry-After then continue automatically.
+ Each player is committed by refresh_owned_activity_one before moving on.
+ """
+ wallet=wallet.strip().lower(); t=token()
+ c=db();init(c);ensure_v2(c);ensure_activity_v28(c)
+ rows=c.execute("""SELECT o.player_id,o.player_name
+ FROM ownership_v65 o
+ LEFT JOIN ownership_activity_v28 a ON a.wallet=o.wallet AND a.player_id=o.player_id
+ WHERE o.wallet=? AND a.player_id IS NULL
+ ORDER BY o.player_name ASC""",(wallet,)).fetchall()
+ c.close()
+ if max_players: rows=rows[:int(max_players)]
+ total=len(rows); done=0; errors=[]
+ for r in rows:
+  attempts=0
+  while True:
+   try:
+    n,last=refresh_owned_activity_one(wallet,r["player_id"],t)
+    done+=1
+    if progress_callback: progress_callback(done,total,r["player_name"],None)
+    time.sleep(1.0)
+    break
+   except Exception as e:
+    msg=str(e)
+    if ("429" in msg or "RATE_LIMIT" in msg) and attempts<8:
+     attempts+=1
+     # Existing GET helper may already have exhausted retries; use a conservative
+     # cooldown and surface it to the UI.
+     wait=195
+     if progress_callback: progress_callback(done,total,r["player_name"],wait)
+     time.sleep(wait)
+     # Refresh auth after a long wait.
+     try:t=token()
+     except:pass
+     continue
+    errors.append({"player_id":r["player_id"],"player_name":r["player_name"],"error":msg})
+    if progress_callback: progress_callback(done,total,r["player_name"],-1)
+    break
+ return {"completed":done,"attempted":total,"errors":errors}
