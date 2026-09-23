@@ -348,3 +348,24 @@ def refresh_current_v21(wallet, progress=None, batch_size=20):
   if progress:progress(done,min(batch_size,len(ordered)))
   time.sleep(.45)
  c.close();return done,len(ids),errors
+
+def refresh_whole_agency(wallet, progress=None, chunk_size=20, pause_seconds=6, max_chunks=30):
+ """Refresh metadata/current stats/activity for the whole cached agency in safe rotating chunks."""
+ wallet=wallet.strip().lower()
+ c=db();init(c);ensure_v2(c)
+ total=c.execute("SELECT COUNT(*) n FROM ownership_v65 WHERE wallet=?",(wallet,)).fetchone()["n"]
+ c.close()
+ completed=0;errors=[];rate_limited=False
+ # refresh_current_v21 chooses least-recently snapshotted players, so successive
+ # calls naturally move through the agency rather than repeating the same group.
+ for chunk in range(max_chunks):
+  done,agency_total,errs=refresh_current_v21(wallet,None,chunk_size)
+  completed += done
+  errors.extend(errs)
+  if progress: progress(min(completed,total),total,chunk+1)
+  limited=any(("429" in msg or "rate-limit" in msg.lower() or "rate limit" in msg.lower()) for _,msg in errs)
+  if limited:
+   rate_limited=True;break
+  if done==0 or completed>=total:break
+  time.sleep(pause_seconds)
+ return {"refreshed":min(completed,total),"total":total,"errors":errors,"rate_limited":rate_limited,"complete":completed>=total}

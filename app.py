@@ -94,17 +94,28 @@ if len(df) < live_total:
   except Exception as e:
    bar.empty();status.empty();st.error(f"{type(e).__name__}: {e}")
 
-top1,top2=st.columns([1,4])
+top1,top2=st.columns([1,3])
 with top1:
- if st.button("🔄 Refresh 20 players",type="primary"):
-  bar=st.progress(0,text="Refreshing current data…")
-  def prog(n,total):bar.progress(min(1,n/max(1,20)),text=f"Refreshing {n}/20…")
-  done,total,errs=ab.refresh_current_v21(wallet,prog,20);bar.empty()
-  if errs:st.warning(f"Refreshed {done}; {len(errs)} issue(s).")
-  else:st.success(f"Refreshed {done} players.")
-  st.rerun()
+ if st.button("🔄 Refresh whole agency",type="primary"):
+  bar=st.progress(0,text="Starting agency refresh…")
+  status=st.empty()
+  def prog(done,total,chunk):
+   bar.progress(done/max(total,1),text=f"Refreshing agency: {done}/{total}")
+   status.caption(f"Completed refresh batch {chunk}. Pausing briefly between batches.")
+  try:
+   result=ab.refresh_whole_agency(wallet,prog,chunk_size=20,pause_seconds=6,max_chunks=30)
+   bar.empty();status.empty()
+   if result["complete"]:
+    st.success(f"Agency refresh complete: {result['refreshed']}/{result['total']} players updated.")
+   elif result["rate_limited"]:
+    st.warning(f"MFL rate limit reached safely after {result['refreshed']} players. Completed updates are saved; wait a little and press Refresh whole agency again.")
+   else:
+    st.info(f"Refresh paused after {result['refreshed']}/{result['total']} players. Completed updates are saved.")
+   st.rerun()
+  except Exception as e:
+   bar.empty();status.empty();st.error(f"{type(e).__name__}: {e}")
 with top2:
- st.caption("Age and position now use the confirmed MFL fields: metadata.age and metadata.positions. Club uses the confirmed contract/club data. Each refresh moves through the least-recently refreshed players.")
+ st.caption("One click refreshes age, position, club, current ratings and activity for the whole cached agency in API-safe groups of 20. Historical ownership baselines are left untouched.")
 
 df=load()
 m1,m2,m3,m4,m5=st.columns(5)
