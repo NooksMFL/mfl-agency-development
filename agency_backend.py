@@ -671,7 +671,7 @@ def probe_match_endpoints(player_id):
   except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
  return out
 
-APP_BACKEND_VERSION = "2.16"
+APP_BACKEND_VERSION = "2.17"
 
 def probe_match_feed_filters(player_id, club_id=None, squad_id=None):
  """Targeted diagnostic based on the confirmed /matches/feed route.
@@ -723,4 +723,47 @@ def probe_match_feed_filters(player_id, club_id=None, squad_id=None):
    out.append(item)
    if r.status_code==429:break
   except Exception as e:out.append({"params":params,"error":str(e)})
+ return out
+
+def probe_club_history(club_id, squad_id=None):
+ """Diagnostic for the club-history path used by MFL's public club pages."""
+ cid=int(club_id); sid=int(squad_id) if squad_id else None; t=token()
+ candidates=[
+  (f"/clubs/{cid}/matches",None),
+  (f"/clubs/{cid}/matches/history",None),
+  (f"/clubs/{cid}/history",None),
+  (f"/clubs/{cid}/schedule",None),
+  ("/matches",{"clubId":cid,"limit":25}),
+  ("/matches/feed",{"clubId":cid,"limit":25}),
+  ("/matches/feed",{"club":cid,"limit":25}),
+ ]
+ if sid:
+  candidates += [
+   (f"/squads/{sid}/matches",None),
+   (f"/squads/{sid}/history",None),
+   ("/matches",{"squadId":sid,"limit":25}),
+   ("/matches/feed",{"squadId":sid,"limit":25}),
+   ("/matches/feed",{"squad":sid,"limit":25}),
+  ]
+ out=[]
+ for path,params in candidates:
+  try:
+   r=requests.get(BASE+path,headers=ah(t),params=params,timeout=12)
+   item={"path":path,"params":params,"status":r.status_code}
+   try:
+    js=r.json()
+    item["count"]=len(js) if isinstance(js,list) else None
+    if isinstance(js,list):
+     item["sample"]=[{
+      "id":x.get("id"),"status":x.get("status"),"type":x.get("type"),
+      "home":x.get("homeTeamName"),"away":x.get("awayTeamName"),
+      "homeSquadId":((x.get("homeSquad") or {}).get("id") if isinstance(x.get("homeSquad"),dict) else None),
+      "awaySquadId":((x.get("awaySquad") or {}).get("id") if isinstance(x.get("awaySquad"),dict) else None),
+      "startDate":x.get("startDate")
+     } for x in js[:5]]
+    else:item["json"]=js
+   except Exception:item["text"]=r.text[:1000]
+   out.append(item)
+   if r.status_code==429:break
+  except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
  return out

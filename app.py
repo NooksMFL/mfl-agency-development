@@ -264,6 +264,22 @@ with st.expander("🎯 Targeted /matches/feed filter diagnostic"):
   except Exception as e:
    st.error(f"{type(e).__name__}: {e}")
 
+
+with st.expander("🏟️ Club history API diagnostic"):
+ st.caption("MFL's public club pages definitely expose Latest Matches, Schedule and History. Enter a real club ID from an MFL club URL; squad ID is optional.")
+ hist_club=st.number_input("Club ID from app.playmfl.com/clubs/…",min_value=1,value=8172,step=1,key="hist_club")
+ hist_squad=st.number_input("Squad ID (optional)",min_value=0,value=0,step=1,key="hist_squad")
+ if st.button("Probe club history"):
+  try:
+   with st.spinner("Testing club/squad history routes…"):
+    hist_probe=ab.probe_club_history(int(hist_club),int(hist_squad) or None)
+   for result in hist_probe:
+    status=result.get("status","error")
+    with st.expander(f"{status} · {result.get('path')} · {result.get('params')}",expanded=(status==200)):
+     st.json(result,expanded=True)
+  except Exception as e:
+   st.error(f"{type(e).__name__}: {e}")
+
 m1,m2,m3,m4,m5=st.columns(5)
 activity_df=pd.DataFrame(ab.agency_v28(wallet))
 if not df.empty and not activity_df.empty:
