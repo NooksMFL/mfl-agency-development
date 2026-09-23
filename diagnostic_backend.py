@@ -41,7 +41,7 @@ def fmt(x):return x.strftime("%d %b %Y %H:%M UTC") if x else "—"
 def diagnose(pid,wallet):
  t=token()
  prof=get(f"/players/{pid}",t)
- sales=items(get("/listings/feed",t,{"limit":100,"playerId":pid}))
+ sales=items(get("/listings/feed",t,{"limit":25,"playerId":pid}))
  exp=items(get(f"/players/{pid}/experiences/history",t))
  w=wallet.lower(); buys=[]
  for e in sales:

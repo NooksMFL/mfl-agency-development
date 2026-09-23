@@ -5,7 +5,7 @@ try:
  if "MFL_REFRESH_TOKEN" in st.secrets:os.environ["MFL_REFRESH_TOKEN"]=st.secrets["MFL_REFRESH_TOKEN"]
 except Exception:pass
 st.title("🧪 MFL Ownership / Acquisition Diagnostic")
-st.caption("v5.1 — uses the same MFL authentication headers as the working agency tracker.")
+st.caption("v5.2 — acquisition diagnostic with MFL listing-feed limit corrected to 25.")
 wallet=st.text_input("Your Dapper wallet",value="0x65cc0e72dd71ad80")
 pid=st.number_input("Player ID",min_value=1,step=1,value=374865)
 if st.button("Check Arnt / this player",type="primary"):
