@@ -283,108 +283,139 @@ with tabs[0]:
   hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","start_ovr":"Start","current_ovr":"Current"})
 with tabs[1]:
  st.subheader("🎮 Needs Games")
- st.caption("Management view based on MFL MATCH-progression activity during the current ownership spell. MATCH is still activity evidence, not a verified official appearance count.")
+ st.caption("Management view based on MFL MATCH-progression activity during the current ownership spell. MATCH is activity evidence, not yet a verified official appearance count.")
 
  ng=df.copy()
  if ng.empty:
   st.info("No agency data available.")
  else:
-  # Normalize numeric fields used by the manager view.
-  for c in ["age","OVR","OVR +","match_events_owned","days_since_match"]:
-   if c in ng.columns: ng[c]=pd.to_numeric(ng[c],errors="coerce")
+  # Resolve presentation-column names once so the view works with the existing dashboard schema.
+  player_col=next((c for c in ["Player","player_name","Name"] if c in ng.columns),None)
+  age_col=next((c for c in ["Age","age"] if c in ng.columns),None)
+  pos_col=next((c for c in ["Position","position"] if c in ng.columns),None)
+  club_col=next((c for c in ["Club","club"] if c in ng.columns),None)
+  ovr_col=next((c for c in ["Current","OVR","current_ovr"] if c in ng.columns),None)
+  gain_col=next((c for c in ["OVR +","ovr_gain"] if c in ng.columns),None)
+  own_col=next((c for c in ["Ownership","source"] if c in ng.columns),None)
+
+  for c in [age_col,ovr_col,gain_col,"match_events_owned","days_since_match"]:
+   if c and c in ng.columns: ng[c]=pd.to_numeric(ng[c],errors="coerce")
 
   scanned=ng["activity_scanned_at"].notna() if "activity_scanned_at" in ng.columns else pd.Series(False,index=ng.index)
   matches=ng["match_events_owned"] if "match_events_owned" in ng.columns else pd.Series(float("nan"),index=ng.index)
   days=ng["days_since_match"] if "days_since_match" in ng.columns else pd.Series(float("nan"),index=ng.index)
 
   def attention_reason(i):
-   if not bool(scanned.loc[i]): return "NOT SCANNED"
-   m=matches.loc[i]
-   d=days.loc[i]
-   age=ng.at[i,"age"] if "age" in ng.columns else None
+   if not bool(scanned.loc[i]): return "⚪ NOT SCANNED"
+   m=matches.loc[i]; d=days.loc[i]
+   age=ng.at[i,age_col] if age_col else None
    status=str(ng.at[i,"Status"]) if "Status" in ng.columns else ""
    tag=str(ng.at[i,"tag"]).upper() if "tag" in ng.columns and pd.notna(ng.at[i,"tag"]) else "NORMAL"
    if tag=="PRIORITY": return "⭐ PRIORITY"
-   if pd.isna(m) or int(m)==0: return "🚨 NEVER MATCH ACTIVE"
+   if pd.isna(m) or int(m)==0:
+    if "NEW MINT" in status and pd.notna(age) and age<=23: return "🆕 NEW MINT · NO MATCH"
+    return "🚨 NO MATCH ACTIVITY"
    if pd.notna(d) and d>=30: return "🔴 30+ DAYS"
-   if pd.notna(d) and d>=14: return "🟠 14+ DAYS"
-   if "NEW MINT" in status and pd.notna(age) and age<=23: return "🆕 YOUNG NEW MINT"
-   if tag in ("DEVELOP","WATCH"): return f"🏷️ {tag}"
+   if pd.notna(d) and d>=14: return "🟠 14–29 DAYS"
+   if tag=="DEVELOP": return "🏷️ DEVELOP"
+   if tag=="WATCH": return "👀 WATCH"
    return "🟢 RECENT"
 
   ng["Attention"]=pd.Series({i:attention_reason(i) for i in ng.index})
-  priority_order={"⭐ PRIORITY":0,"🚨 NEVER MATCH ACTIVE":1,"🔴 30+ DAYS":2,
-                  "🟠 14+ DAYS":3,"🆕 YOUNG NEW MINT":4,"🏷️ DEVELOP":5,
-                  "🏷️ WATCH":6,"🟢 RECENT":7,"NOT SCANNED":8}
-  ng["_attention_order"]=ng["Attention"].map(priority_order).fillna(9)
+  order={"⭐ PRIORITY":0,"🆕 NEW MINT · NO MATCH":1,"🚨 NO MATCH ACTIVITY":2,
+         "🔴 30+ DAYS":3,"🟠 14–29 DAYS":4,"🏷️ DEVELOP":5,
+         "👀 WATCH":6,"🟢 RECENT":7,"⚪ NOT SCANNED":8}
+  ng["_attention_order"]=ng["Attention"].map(order).fillna(9)
 
-  c1,c2,c3,c4=st.columns(4)
-  c1.metric("Never match active",int(((scanned)&(matches.fillna(0)==0)).sum()))
-  c2.metric("30+ days",int(((scanned)&(days.fillna(-1)>=30)).sum()))
-  c3.metric("14–29 days",int(((scanned)&(days.fillna(-1)>=14)&(days.fillna(-1)<30)).sum()))
-  c4.metric("Recent <14 days",int(((scanned)&(days.fillna(10**6)<14)).sum()))
+  # Summary metrics.
+  c1,c2,c3,c4,c5=st.columns(5)
+  c1.metric("New mints · no match",int((ng["Attention"]=="🆕 NEW MINT · NO MATCH").sum()))
+  c2.metric("Other · no match",int((ng["Attention"]=="🚨 NO MATCH ACTIVITY").sum()))
+  c3.metric("30+ days",int((ng["Attention"]=="🔴 30+ DAYS").sum()))
+  c4.metric("14–29 days",int((ng["Attention"]=="🟠 14–29 DAYS").sum()))
+  c5.metric("Recent",int((ng["Attention"]=="🟢 RECENT").sum()))
 
-  st.markdown("#### Filters")
-  f1,f2,f3,f4=st.columns(4)
-  with f1:
-   attention_options=["All"]+[x for x in priority_order if x in set(ng["Attention"])]
-   att=st.selectbox("Attention",attention_options)
-  with f2:
-   max_age=int(ng["age"].dropna().max()) if "age" in ng.columns and ng["age"].notna().any() else 50
-   age_max=st.slider("Maximum age",16,max(16,max_age),min(30,max(16,max_age)))
-  with f3:
-   positions=sorted({p.strip() for v in ng.get("Position",pd.Series(dtype=str)).dropna().astype(str) for p in v.split("/") if p.strip()})
-   pos=st.selectbox("Position",["All"]+positions)
-  with f4:
-   ownership=st.selectbox("Ownership",["All","BOUGHT","NEW MINT / ORIGINAL"])
+  st.markdown("#### Quick views")
+  q1,q2,q3,q4=st.columns(4)
+  young_only=q1.toggle("23 & under",value=False)
+  developing_only=q2.toggle("Developing only",value=False)
+  no_match_only=q3.toggle("No match activity",value=False)
+  stale_only=q4.toggle("14+ days / never",value=False)
 
-  f5,f6,f7=st.columns(3)
-  with f5:
-   clubs=sorted(ng["Club"].dropna().astype(str).unique().tolist()) if "Club" in ng.columns else []
-   club=st.selectbox("Club",["All"]+clubs)
-  with f6:
-   tag_options=["All"]+sorted(ng["tag"].dropna().astype(str).unique().tolist()) if "tag" in ng.columns else ["All"]
-   tag_filter=st.selectbox("Tag",tag_options)
-  with f7:
-   sort_choice=st.selectbox("Sort by",["Needs attention","Longest since match","Fewest match events","Youngest","OVR gain"])
+  with st.expander("More filters",expanded=False):
+   f1,f2,f3,f4=st.columns(4)
+   with f1:
+    att=st.selectbox("Attention",["All"]+[x for x in order if x in set(ng["Attention"])])
+   with f2:
+    positions=sorted({p.strip() for v in ng[pos_col].dropna().astype(str) for p in v.split("/") if p.strip()}) if pos_col else []
+    pos=st.selectbox("Position",["All"]+positions)
+   with f3:
+    ownership_values=sorted(ng[own_col].dropna().astype(str).unique().tolist()) if own_col else []
+    ownership=st.selectbox("Ownership",["All"]+ownership_values)
+   with f4:
+    clubs=sorted(ng[club_col].dropna().astype(str).unique().tolist()) if club_col else []
+    club=st.selectbox("Club",["All"]+clubs)
 
+   f5,f6=st.columns(2)
+   with f5:
+    tags=["All"]+sorted(ng["tag"].dropna().astype(str).unique().tolist()) if "tag" in ng.columns else ["All"]
+    tag_filter=st.selectbox("Tag",tags)
+   with f6:
+    sort_choice=st.selectbox("Sort by",["Needs attention","Longest since match","Fewest match events","Youngest","OVR gain"])
+  # Defaults when expander widgets exist but no special selection.
   view=ng.copy()
+  if young_only and age_col: view=view[view[age_col].fillna(999)<=23]
+  if developing_only and "Status" in view.columns: view=view[view["Status"].astype(str).str.contains("DEVELOPING",na=False)]
+  if no_match_only: view=view[view["match_events_owned"].fillna(0).eq(0) & view["activity_scanned_at"].notna()]
+  if stale_only: view=view[(view["activity_scanned_at"].notna()) & (view["match_events_owned"].fillna(0).eq(0) | view["days_since_match"].fillna(-1).ge(14))]
+
   if att!="All": view=view[view["Attention"]==att]
-  if "age" in view.columns: view=view[(view["age"].isna())|(view["age"]<=age_max)]
-  if pos!="All" and "Position" in view.columns:
-   view=view[view["Position"].fillna("").astype(str).apply(lambda x: pos in [p.strip() for p in x.split("/")])]
-  if ownership!="All" and "Ownership" in view.columns: view=view[view["Ownership"]==ownership]
-  if club!="All" and "Club" in view.columns: view=view[view["Club"]==club]
-  if tag_filter!="All" and "tag" in view.columns: view=view[view["tag"]==tag_filter]
+  if pos!="All" and pos_col:
+   view=view[view[pos_col].fillna("").astype(str).apply(lambda x: pos in [p.strip() for p in x.split("/")])]
+  if ownership!="All" and own_col: view=view[view[own_col].astype(str)==ownership]
+  if club!="All" and club_col: view=view[view[club_col].astype(str)==club]
+  if tag_filter!="All" and "tag" in view.columns: view=view[view["tag"].astype(str)==tag_filter]
 
   if sort_choice=="Needs attention":
-   view=view.sort_values(["_attention_order","days_since_match","age"],ascending=[True,False,True],na_position="last")
+   view=view.sort_values(["_attention_order","days_since_match"],ascending=[True,False],na_position="last")
   elif sort_choice=="Longest since match":
    view=view.sort_values("days_since_match",ascending=False,na_position="last")
   elif sort_choice=="Fewest match events":
    view=view.sort_values(["match_events_owned","days_since_match"],ascending=[True,False],na_position="last")
-  elif sort_choice=="Youngest":
-   view=view.sort_values(["age","days_since_match"],ascending=[True,False],na_position="last")
-  elif sort_choice=="OVR gain" and "OVR +" in view.columns:
-   view=view.sort_values("OVR +",ascending=False,na_position="last")
+  elif sort_choice=="Youngest" and age_col:
+   view=view.sort_values(age_col,ascending=True,na_position="last")
+  elif sort_choice=="OVR gain" and gain_col:
+   view=view.sort_values(gain_col,ascending=False,na_position="last")
 
-  st.markdown(f"#### Players requiring review · {len(view)}")
-  # Friendly presentation values.
   view["Match activity"]=view.apply(
-   lambda r: "Not scanned" if pd.isna(r.get("activity_scanned_at"))
+   lambda r:"Not scanned" if pd.isna(r.get("activity_scanned_at"))
    else ("0 · Never" if pd.isna(r.get("match_events_owned")) or int(r.get("match_events_owned"))==0
-         else f"{int(r.get('match_events_owned'))}"),axis=1)
+         else str(int(r.get("match_events_owned")))),axis=1)
   view["Last match"]=view.apply(
-   lambda r: "Not scanned" if pd.isna(r.get("activity_scanned_at"))
+   lambda r:"Not scanned" if pd.isna(r.get("activity_scanned_at"))
    else ("Never" if pd.isna(r.get("days_since_match"))
          else ("Today" if int(r.get("days_since_match"))==0 else f"{int(r.get('days_since_match'))} days ago")),axis=1)
 
-  cols=["Attention","Status","Player","age","Position","Club","OVR","OVR +",
-        "Match activity","Last match","Ownership","tag","note"]
-  cols=[c for c in cols if c in view.columns]
-  st.dataframe(view[cols],use_container_width=True,hide_index=True,height=520)
+  # Create explicit stable display columns; this fixes the missing Player/Position/Club issue.
+  display=pd.DataFrame(index=view.index)
+  display["Attention"]=view["Attention"]
+  if player_col: display["Player"]=view[player_col]
+  if "Status" in view.columns: display["Status"]=view["Status"]
+  if age_col: display["Age"]=view[age_col]
+  if pos_col: display["Position"]=view[pos_col]
+  if club_col: display["Club"]=view[club_col]
+  if ovr_col: display["OVR"]=view[ovr_col]
+  if gain_col: display["OVR +"]=view[gain_col]
+  display["Match activity"]=view["Match activity"]
+  display["Last match"]=view["Last match"]
+  if own_col: display["Ownership"]=view[own_col]
+  if "tag" in view.columns: display["Tag"]=view["tag"]
+  if "note" in view.columns: display["Note"]=view["note"]
 
-  st.caption("Attention categories are workflow flags, not player-quality ratings. 'Never' means no MFL MATCH progression event was found from the current ownership baseline onward.")
+  st.markdown(f"#### Players shown · {len(display)}")
+  st.dataframe(display,use_container_width=True,hide_index=True,height=560)
+  st.caption("Attention buckets are workflow flags, not player-quality ratings. 'Never' means no MFL MATCH progression event was found from the current ownership baseline onward.")
+
 with tabs[2]:
  mint=df[df.source=="NEW MINT / ORIGINAL"].sort_values(["OVR +","current_ovr"],ascending=False)
  st.dataframe(mint[["Status","player_name","age","Initial date","start_ovr","current_ovr","OVR +","match_events","Days since activity"]],
