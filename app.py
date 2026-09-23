@@ -96,26 +96,28 @@ if len(df) < live_total:
 
 top1,top2=st.columns([1,3])
 with top1:
- if st.button("🔄 Refresh whole agency",type="primary"):
-  bar=st.progress(0,text="Starting agency refresh…")
-  status=st.empty()
-  def prog(done,total,chunk):
-   bar.progress(done/max(total,1),text=f"Refreshing agency: {done}/{total}")
-   status.caption(f"Completed refresh batch {chunk}. Pausing briefly between batches.")
+ if st.button("⚡ Fill age / position / club",type="primary"):
   try:
-   result=ab.refresh_whole_agency(wallet,prog,chunk_size=20,pause_seconds=6,max_chunks=30)
-   bar.empty();status.empty()
-   if result["complete"]:
-    st.success(f"Agency refresh complete: {result['refreshed']}/{result['total']} players updated.")
-   elif result["rate_limited"]:
-    st.warning(f"MFL rate limit reached safely after {result['refreshed']} players. Completed updates are saved; wait a little and press Refresh whole agency again.")
-   else:
-    st.info(f"Refresh paused after {result['refreshed']}/{result['total']} players. Completed updates are saved.")
+   with st.spinner("Reading current agency roster…"):
+    updated=ab.fill_metadata_from_roster(wallet)
+   st.success(f"Metadata loaded for {updated} roster players from one MFL roster request.")
    st.rerun()
-  except Exception as e:
-   bar.empty();status.empty();st.error(f"{type(e).__name__}: {e}")
+  except Exception as e:st.error(f"{type(e).__name__}: {e}")
 with top2:
- st.caption("One click refreshes age, position, club, current ratings and activity for the whole cached agency in API-safe groups of 20. Historical ownership baselines are left untouched.")
+ mc=ab.metadata_counts(wallet)
+ st.caption(f"Metadata stored — Age: {mc.get('ages',0)} · Position: {mc.get('positions',0)} · Club: {mc.get('clubs',0)}. This uses the bulk roster response instead of opening every player individually.")
+
+with st.expander("Current stats & activity refresh"):
+ st.caption("This is the slower per-player job. It is optional for metadata and can be resumed safely in small batches.")
+ if st.button("Refresh next 20 current/activity"):
+  bar=st.progress(0,text="Refreshing next 20…")
+  def prog(n,total):bar.progress(n/max(total,1),text=f"Refreshing {n}/{total}…")
+  try:
+   done,total,errs=ab.refresh_current_v21(wallet,prog,20);bar.empty()
+   if errs:st.warning(f"Updated {done} players; {len(errs)} issue(s). Press again later to continue.")
+   else:st.success(f"Updated {done} players. Press again when you want the next least-recently refreshed group.")
+   st.rerun()
+  except Exception as e:bar.empty();st.error(f"{type(e).__name__}: {e}")
 
 df=load()
 m1,m2,m3,m4,m5=st.columns(5)

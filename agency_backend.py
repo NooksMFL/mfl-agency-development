@@ -369,3 +369,32 @@ def refresh_whole_agency(wallet, progress=None, chunk_size=20, pause_seconds=6, 
   if done==0 or completed>=total:break
   time.sleep(pause_seconds)
  return {"refreshed":min(completed,total),"total":total,"errors":errors,"rate_limited":rate_limited,"complete":completed>=total}
+
+def fill_metadata_from_roster(wallet):
+ """Populate age/position/club for every cached player from one roster request."""
+ wallet=wallet.strip().lower();t=token();c=db();init(c);ensure_v2(c)
+ raw=roster_payload(wallet,t);updated=0
+ for item in raw:
+  p=unwrap(item)
+  pid=p.get("id") or p.get("playerId") or p.get("playerID")
+  try:pid=int(pid)
+  except:continue
+  meta=player_meta_from_payload(p)
+  c.execute("""INSERT INTO player_meta(wallet,player_id,age,position,club) VALUES(?,?,?,?,?)
+   ON CONFLICT(wallet,player_id) DO UPDATE SET
+   age=COALESCE(excluded.age,player_meta.age),
+   position=COALESCE(excluded.position,player_meta.position),
+   club=COALESCE(excluded.club,player_meta.club)""",
+   (wallet,pid,meta.get("age"),meta.get("position"),meta.get("club")))
+  updated+=1
+ c.commit();c.close();return updated
+
+def metadata_counts(wallet):
+ c=db();init(c);ensure_v2(c)
+ r=c.execute("""SELECT COUNT(*) total,
+ SUM(CASE WHEN age IS NOT NULL THEN 1 ELSE 0 END) ages,
+ SUM(CASE WHEN position IS NOT NULL AND position<>'' THEN 1 ELSE 0 END) positions,
+ SUM(CASE WHEN club IS NOT NULL AND club<>'' THEN 1 ELSE 0 END) clubs
+ FROM player_meta WHERE wallet=?""",(wallet.strip().lower(),)).fetchone()
+ c.close()
+ return dict(r) if r else {"total":0,"ages":0,"positions":0,"clubs":0}
