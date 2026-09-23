@@ -686,7 +686,7 @@ def probe_match_endpoints(player_id):
   except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
  return out
 
-APP_BACKEND_VERSION = "2.22"
+APP_BACKEND_VERSION = "2.23"
 
 def probe_match_feed_filters(player_id, club_id=None, squad_id=None):
  """Targeted diagnostic based on the confirmed /matches/feed route.
@@ -861,3 +861,46 @@ def refresh_token_metadata():
     except Exception as e:
         out["decode_error"]=f"{type(e).__name__}: {e}"
     return out
+
+
+def refresh_metadata_v23(wallet):
+    """Backfill age/position/club for a wallet. Uses one roster request first,
+    then player profiles only for fields still missing."""
+    wallet=wallet.strip().lower()
+    t=token(); c=db(); init(c); ensure_v2(c)
+    roster=roster_payload(wallet,t)
+    unresolved=[]
+    updated=0
+    for item in roster:
+        p=unwrap(item)
+        pid=p.get("id") or p.get("playerId") or p.get("playerID")
+        try: pid=int(pid)
+        except: continue
+        meta=player_meta_from_payload(p)
+        age,position,club=meta.get("age"),meta.get("position"),meta.get("club")
+        c.execute("""INSERT INTO player_meta(wallet,player_id,age,position,club) VALUES(?,?,?,?,?)
+          ON CONFLICT(wallet,player_id) DO UPDATE SET
+          age=COALESCE(excluded.age,player_meta.age),
+          position=COALESCE(excluded.position,player_meta.position),
+          club=COALESCE(excluded.club,player_meta.club)""",
+          (wallet,pid,age,position,club))
+        if age is None or not position or not club:
+            unresolved.append(pid)
+        updated+=1
+    c.commit()
+    # Profile endpoint has the full metadata shape. Keep this conservative to avoid
+    # hammering MFL; missing fields can be completed on later sessions.
+    for pid in unresolved[:40]:
+        try:
+            p=unwrap(get(f"{BASE}/players/{pid}",t))
+            meta=player_meta_from_payload(p)
+            c.execute("""INSERT INTO player_meta(wallet,player_id,age,position,club) VALUES(?,?,?,?,?)
+              ON CONFLICT(wallet,player_id) DO UPDATE SET
+              age=COALESCE(excluded.age,player_meta.age),
+              position=COALESCE(excluded.position,player_meta.position),
+              club=COALESCE(excluded.club,player_meta.club)""",
+              (wallet,pid,meta.get("age"),meta.get("position"),meta.get("club")))
+        except Exception:
+            continue
+    c.commit(); c.close()
+    return {"roster_rows":updated,"profile_backfill_attempted":min(len(unresolved),40)}

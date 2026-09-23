@@ -70,8 +70,8 @@ def load():
  for lab,cur,start in [("OVR +","current_ovr","start_ovr"),("PAC +","current_pac","start_pac"),("SHO +","current_sho","start_sho"),
  ("PAS +","current_pas","start_pas"),("DRI +","current_dri","start_dri"),("DEF +","current_def","start_def"),("PHY +","current_phy","start_phy")]:
   d[lab]=pd.to_numeric(d[cur],errors="coerce")-pd.to_numeric(d[start],errors="coerce")
- d["Acquired"]=pd.to_datetime(d.acquired_at,utc=True,errors="coerce").dt.strftime("%d %b %Y")
- d["Initial date"]=pd.to_datetime(d.history_start,utc=True,errors="coerce").dt.strftime("%d %b %Y")
+ d["Acquired"]=pd.to_datetime(d.acquired_at,utc=True,errors="coerce")
+ d["Initial date"]=pd.to_datetime(d.history_start,utc=True,errors="coerce")
  last=pd.to_datetime(d.last_event_at,utc=True,errors="coerce")
  now=pd.Timestamp.now(tz="UTC")
  d["Days since activity"]=(now-last).dt.days
@@ -104,6 +104,10 @@ if df.empty:
    bar.empty();status.empty()
    if result["complete"]:
     st.success(f"Agency built: {result['analysed']}/{result['total']} players.")
+    try:
+     ab.refresh_metadata_v23(wallet)
+    except Exception:
+     pass
    elif result["rate_limited"]:
     st.warning(f"MFL rate limit reached at {result['analysed']}/{result['total']}. Everything completed is saved. Wait a little, then press Continue agency build.")
    else:
@@ -112,6 +116,22 @@ if df.empty:
   except Exception as e:
    bar.empty();status.empty();st.error(f"{type(e).__name__}: {e}")
  st.stop()
+
+# Backfill public-wallet metadata once per session when older imports are missing age/position/club.
+_meta_key=f"meta_v23_{wallet}"
+if not st.session_state.get(_meta_key):
+ try:
+  counts=ab.metadata_counts(wallet)
+  total=int(counts[0] or 0) if counts else 0
+  ages=int(counts[1] or 0) if counts else 0
+  positions=int(counts[2] or 0) if counts else 0
+  clubs=int(counts[3] or 0) if counts else 0
+  if total==0 or ages<total or positions<total or clubs<total:
+   ab.refresh_metadata_v23(wallet)
+   df=load()
+ except Exception:
+  pass
+ st.session_state[_meta_key]=True
 
 # compact controls
 # If the cache is only partially rebuilt, show a one-click continuation control.
@@ -130,7 +150,12 @@ if len(df) < live_total:
   try:
    result=ab.finish_import(wallet,importprog,chunk_size=12,pause_seconds=8,max_chunks=40)
    bar.empty();status.empty()
-   if result["complete"]: st.success(f"Agency built: {result['analysed']}/{result['total']} players.")
+   if result["complete"]:
+    st.success(f"Agency built: {result['analysed']}/{result['total']} players.")
+    try:
+     ab.refresh_metadata_v23(wallet)
+    except Exception:
+     pass
    elif result["rate_limited"]: st.warning(f"Rate limit reached at {result['analysed']}/{result['total']}. Saved safely; continue later.")
    else: st.info(f"Paused at {result['analysed']}/{result['total']}. Saved safely.")
    st.rerun()
@@ -485,6 +510,6 @@ with tabs[4]:
  elif sort=="Age":v=v.sort_values("age",na_position="last")
  else:v=v.sort_values("player_name")
  st.dataframe(v[["Status","player_name","age","position","club","source","Acquired","start_ovr","current_ovr","OVR +","match_events","Days since activity"]],
-  hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","club":"Club","source":"Ownership","current_ovr":"OVR","start_ovr":"Start","match_events":"Match events"})
+  hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","club":"Club","source":"Ownership","Acquired":st.column_config.DatetimeColumn("Acquired",format="DD MMM YYYY"),"current_ovr":"OVR","start_ovr":"Start","match_events":"Match events"})
 
 st.caption("Ownership development baselines: BOUGHT = verified purchase into this wallet; NEW / ORIGINAL = MFL INITIAL player state. Match activity is counted only from the current ownership baseline onward. MATCH is an MFL progression-history label and is not yet claimed as an official appearance count.")
