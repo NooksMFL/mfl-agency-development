@@ -209,8 +209,15 @@ if not df.empty and not activity_df.empty:
   for c in ["match_events_owned","last_match_at","days_since_match","activity_scanned_at"]:
    if c in activity_df.columns and len(activity_df)==len(df):
     df[c]=activity_df[c].values
- if "match_events_owned" in df.columns: df["Match events"]=df["match_events_owned"]
- if "days_since_match" in df.columns: df["Days since activity"]=df["days_since_match"]
+ if "match_events_owned" in df.columns:
+  # Existing tabs use lowercase `match_events`; replace the old generic activity value
+  # with the new ownership-spell MATCH count.
+  df["match_events"]=df["match_events_owned"]
+  df["Match events"]=df["match_events_owned"]
+ if "days_since_match" in df.columns:
+  # Existing `Days since activity` was based on ANY progression event (training etc.).
+  # Needs Games must instead use the last ownership-spell MATCH event.
+  df["Days since activity"]=df["days_since_match"]
 m1.metric("Players",len(df));m2.metric("Improved OVR",int((df["OVR +"]>0).sum()))
 m3.metric("New / original",int((df.source=="NEW MINT / ORIGINAL").sum()))
 m4.metric("Bought",int((df.source=="BOUGHT").sum()))
@@ -224,7 +231,7 @@ with tabs[0]:
   hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","start_ovr":"Start","current_ovr":"Current"})
 with tabs[1]:
  st.subheader("Needs games / attention")
- st.caption("This becomes more accurate as players are refreshed. 'Match events' currently comes directly from MFL progression-history events labelled MATCH.")
+ st.caption("Only scanned players have match-activity data. Match events are MFL progression-history events labelled MATCH during the current ownership spell; Days since activity means days since the latest such MATCH event.")
  need=df.copy()
  need["match_events"]=pd.to_numeric(need.match_events,errors="coerce")
  need=need[(need.tag.isin(["DEVELOP","PRIORITY","WATCH"])) | (need.source=="NEW MINT / ORIGINAL")]
