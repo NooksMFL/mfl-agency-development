@@ -1,2 +1,2 @@
-# MFL Agency Development v3
-Wallet-first agency tracker. The site uses its own server-side MFL refresh token; visitors only enter a public Dapper wallet address.
+# MFL Agency Development v4
+Wallet roster + per-player full-profile enrichment. Existing v3 blank baselines are repaired on the first successful v4 sync.
