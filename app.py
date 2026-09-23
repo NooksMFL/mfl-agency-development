@@ -235,8 +235,12 @@ with st.expander("🔎 Real match-history API diagnostic"):
  st.caption("MFL MATCH progression is not a reliable appearance count. Use this on a player you know has played; it tests first-party MFL routes only and does not alter the database.")
  probe_choices={f"{r.player_name} · {int(r.player_id)}":int(r.player_id) for _,r in df.sort_values("player_name").iterrows()}
  probe_name=st.selectbox("Known player who has played matches",probe_choices,key="match_api_probe")
+ st.caption(f"Backend: {getattr(ab, 'APP_BACKEND_VERSION', 'older version loaded')}")
  if st.button("Probe match API"):
   try:
+   if not hasattr(ab,"probe_match_endpoints"):
+    st.error("Streamlit is still running the older agency_backend.py. Confirm both files were replaced, then reboot the app.")
+    st.stop()
    with st.spinner("Testing MFL match-history routes…"):
     probe=ab.probe_match_endpoints(probe_choices[probe_name])
    for result in probe:
