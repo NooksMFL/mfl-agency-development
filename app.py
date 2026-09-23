@@ -251,18 +251,16 @@ with st.expander("🔎 Real match-history API diagnostic"):
    st.error(f"{type(e).__name__}: {e}")
 
 
-with st.expander("🧪 Match detail / lineup diagnostic"):
- st.caption("The /matches/feed result is a global live feed — playerId did not filter it. This probes a specific match object for lineups, stats, events and player participation.")
- known_match=st.number_input("Match ID",min_value=1,value=2722915,step=1)
- known_player=st.number_input("Player ID to look for",min_value=1,value=144031,step=1)
- if st.button("Probe match detail"):
+with st.expander("🎯 Targeted /matches/feed filter diagnostic"):
+ st.caption("We confirmed /matches/feed is real, but playerId is ignored. This tests likely query parameter names on that known route and shows only compact samples.")
+ target_player=st.number_input("Target player ID",min_value=1,value=144031,step=1,key="target_feed_player")
+ target_club=st.number_input("Known club ID (optional)",min_value=0,value=0,step=1,key="target_feed_club")
+ target_squad=st.number_input("Known squad ID (optional)",min_value=0,value=0,step=1,key="target_feed_squad")
+ if st.button("Test feed filters"):
   try:
-   with st.spinner("Inspecting match detail routes…"):
-    detail_probe=ab.probe_match_detail(int(known_match),int(known_player))
-   for result in detail_probe:
-    status=result.get("status","error")
-    with st.expander(f"{status} · {result.get('path')}",expanded=(status==200)):
-     st.json(result,expanded=True)
+   with st.spinner("Testing query parameters on /matches/feed…"):
+    feed_probe=ab.probe_match_feed_filters(int(target_player),int(target_club) or None,int(target_squad) or None)
+   st.json(feed_probe,expanded=True)
   except Exception as e:
    st.error(f"{type(e).__name__}: {e}")
 

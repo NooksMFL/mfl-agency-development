@@ -671,33 +671,56 @@ def probe_match_endpoints(player_id):
   except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
  return out
 
-APP_BACKEND_VERSION = "2.15"
+APP_BACKEND_VERSION = "2.16"
 
-def probe_match_detail(match_id, player_id=None):
- """Diagnostic: inspect a known match and plausible stats/lineup routes."""
- mid=int(match_id); pid=int(player_id) if player_id else None; t=token()
- candidates=[
-  (f"/matches/{mid}",None),
-  (f"/matches/{mid}/stats",None),
-  (f"/matches/{mid}/lineups",None),
-  (f"/matches/{mid}/players",None),
-  (f"/matches/{mid}/events",None),
-  (f"/matches/{mid}/report",None),
-  (f"/matches/{mid}/player-stats",None),
+def probe_match_feed_filters(player_id, club_id=None, squad_id=None):
+ """Targeted diagnostic based on the confirmed /matches/feed route.
+ Tests query parameter shapes instead of inventing new route families.
+ """
+ pid=int(player_id); t=token()
+ tests=[
+  {"playerId":pid,"limit":25},
+  {"playerIds":str(pid),"limit":25},
+  {"player":pid,"limit":25},
+  {"players":str(pid),"limit":25},
+  {"participantId":pid,"limit":25},
+  {"status":"ENDED","playerId":pid,"limit":25},
+  {"status":"FINISHED","playerId":pid,"limit":25},
  ]
- if pid:
-  candidates += [
-   (f"/matches/{mid}/players/{pid}",None),
-   (f"/matches/{mid}/player-stats/{pid}",None),
+ if club_id:
+  cid=int(club_id)
+  tests += [
+   {"clubId":cid,"limit":25},
+   {"clubIds":str(cid),"limit":25},
+   {"status":"ENDED","clubId":cid,"limit":25},
+  ]
+ if squad_id:
+  sid=int(squad_id)
+  tests += [
+   {"squadId":sid,"limit":25},
+   {"squadIds":str(sid),"limit":25},
+   {"status":"ENDED","squadId":sid,"limit":25},
   ]
  out=[]
- for path,params in candidates:
+ for params in tests:
   try:
-   r=requests.get(BASE+path,headers=ah(t),params=params,timeout=12)
-   item={"path":path,"status":r.status_code}
-   try:item["json"]=r.json()
-   except Exception:item["text"]=r.text[:1200]
+   r=requests.get(BASE+"/matches/feed",headers=ah(t),params=params,timeout=12)
+   item={"params":params,"status":r.status_code}
+   try:
+    js=r.json()
+    item["count"]=len(js) if isinstance(js,list) else None
+    # Compact signatures are enough to tell whether a filter changed the feed.
+    if isinstance(js,list):
+     item["sample"]=[{
+       "id":x.get("id"),"status":x.get("status"),"type":x.get("type"),
+       "home":x.get("homeTeamName"),"away":x.get("awayTeamName"),
+       "homeSquadId":((x.get("homeSquad") or {}).get("id") if isinstance(x.get("homeSquad"),dict) else None),
+       "awaySquadId":((x.get("awaySquad") or {}).get("id") if isinstance(x.get("awaySquad"),dict) else None),
+       "startDate":x.get("startDate")
+      } for x in js[:3]]
+    else:item["json"]=js
+   except Exception:item["text"]=r.text[:800]
    out.append(item)
    if r.status_code==429:break
-  except Exception as e:out.append({"path":path,"error":str(e)})
+  except Exception as e:out.append({"params":params,"error":str(e)})
  return out
