@@ -47,10 +47,53 @@ def status(r):
 
 df=load()
 if df.empty:
- st.warning("No agency cache found. Use the previous importer once to build the historical baseline.")
+ st.warning("No agency data is stored on this Streamlit instance yet.")
+ st.subheader("Build agency")
+ st.caption("This will rebuild the historical ownership baseline automatically. You do not need the old importer.")
+ if st.button("🚀 Build my agency",type="primary"):
+  bar=st.progress(0,text="Starting agency import…")
+  status=st.empty()
+  def importprog(done,total,chunk):
+   bar.progress(done/max(total,1),text=f"Building agency: {done}/{total}")
+   status.caption(f"Completed batch {chunk}. Progress is saved after every batch.")
+  try:
+   result=ab.finish_import(wallet,importprog,chunk_size=12,pause_seconds=8,max_chunks=40)
+   bar.empty();status.empty()
+   if result["complete"]:
+    st.success(f"Agency built: {result['analysed']}/{result['total']} players.")
+   elif result["rate_limited"]:
+    st.warning(f"MFL rate limit reached at {result['analysed']}/{result['total']}. Everything completed is saved. Wait a little, then press Continue agency build.")
+   else:
+    st.info(f"Build paused at {result['analysed']}/{result['total']}. Everything completed is saved; press the button again to continue.")
+   st.rerun()
+  except Exception as e:
+   bar.empty();status.empty();st.error(f"{type(e).__name__}: {e}")
  st.stop()
 
 # compact controls
+# If the cache is only partially rebuilt, show a one-click continuation control.
+try:
+ live_total=len(ab.roster_ids(wallet,ab.token()))
+except Exception:
+ live_total=len(df)
+if len(df) < live_total:
+ st.info(f"Agency rebuild in progress: {len(df)}/{live_total} players stored.")
+ if st.button("🚀 Continue agency build",type="primary"):
+  bar=st.progress(0,text="Continuing agency import…")
+  status=st.empty()
+  def importprog(done,total,chunk):
+   bar.progress(done/max(total,1),text=f"Building agency: {done}/{total}")
+   status.caption(f"Completed batch {chunk}. Progress is saved after every batch.")
+  try:
+   result=ab.finish_import(wallet,importprog,chunk_size=12,pause_seconds=8,max_chunks=40)
+   bar.empty();status.empty()
+   if result["complete"]: st.success(f"Agency built: {result['analysed']}/{result['total']} players.")
+   elif result["rate_limited"]: st.warning(f"Rate limit reached at {result['analysed']}/{result['total']}. Saved safely; continue later.")
+   else: st.info(f"Paused at {result['analysed']}/{result['total']}. Saved safely.")
+   st.rerun()
+  except Exception as e:
+   bar.empty();status.empty();st.error(f"{type(e).__name__}: {e}")
+
 top1,top2=st.columns([1,4])
 with top1:
  if st.button("🔄 Refresh 20 players",type="primary"):
