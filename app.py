@@ -7,12 +7,15 @@ except Exception:pass
 st.title("🌱 MFL Agency Development")
 st.caption("How much have your players developed while you owned them?")
 wallet=st.text_input("Dapper wallet address",value="0x65cc0e72dd71ad80").strip()
-if wallet and st.button("Analyse my agency",type="primary"):
- bar=st.progress(0,text="Loading ownership + progression history…")
- def prog(n,total):bar.progress(n/total,text=f"Analysing players… {n}/{total}")
+st.info("API-safe mode: each click analyses up to 15 new players and saves the result. This avoids hammering MFL's rate limit.")
+if wallet and st.button("Analyse next batch",type="primary"):
+ bar=st.progress(0,text="Loading a small batch of ownership + progression history…")
+ def prog(n,total):bar.progress(n/max(total,1),text=f"Analysing this batch… {n}/{total}")
  try:
-  total,ok,errors=ab.sync(wallet,prog);bar.empty();st.success(f"Analysed {ok} of {total} owned players.")
-  if errors:st.warning(f"{len(errors)} players could not be analysed this run.")
+  total,ok,errors,analysed,planned=ab.sync(wallet,prog,batch_size=15);bar.empty()
+  st.success(f"Batch complete: {ok} added · {analysed}/{total} agency players analysed so far.")
+  if planned==0:st.success("Historical analysis is complete for all currently owned players.")
+  if errors:st.warning(f"{len(errors)} player(s) could not be analysed this batch. If MFL rate-limited the request, wait a little before the next batch.")
  except Exception as e:bar.empty();st.error(f"{type(e).__name__}: {e}")
 if wallet:
  c=ab.db();ab.init(c)

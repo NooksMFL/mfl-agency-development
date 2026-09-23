@@ -27,9 +27,16 @@ def token():
 def ah(t):
  h=dict(H);h["Authorization"]="Bearer "+t;return h
 def get(path,t,params=None):
- r=requests.get(BASE+path,headers=ah(t),params=params,timeout=30)
- if not r.ok:raise RuntimeError(f"{path} returned {r.status_code}: {r.text[:180]}")
- return r.json()
+ for attempt in range(5):
+  r=requests.get(BASE+path,headers=ah(t),params=params,timeout=30)
+  if r.status_code==429:
+   wait=int(r.headers.get("Retry-After") or min(60,5*(2**attempt)))
+   time.sleep(wait)
+   continue
+  if not r.ok:raise RuntimeError(f"{path} returned {r.status_code}: {r.text[:180]}")
+  return r.json()
+ raise RuntimeError(f"{path} is still rate-limited after retries. Please wait and try again later.")
+
 def arr(d):
  if isinstance(d,list):return d
  if isinstance(d,dict):
@@ -119,22 +126,26 @@ def analyse(pid,wallet,t):
  cur=profile(pid,t);sales=sale_history(pid,t);exps=exp_history(pid,t);acq,source=acquire(sales,wallet)
  effective,start,owned,last=reconstruct(exps,acq,cur)
  return pid,cur,source,effective,start,owned,last
-def sync(wallet,progress=None):
- wallet=wallet.strip().lower();t=token();ids=list(dict.fromkeys(pid(x) for x in roster(wallet,t)))
+def sync(wallet,progress=None,batch_size=15):
+ wallet=wallet.strip().lower();t=token()
+ # Retry-aware roster request happens only once per batch.
+ ids=list(dict.fromkeys(pid(x) for x in roster(wallet,t)))
+ c=db();init(c)
+ cached={r["player_id"]:r for r in c.execute("SELECT * FROM ownership_v6 WHERE wallet=?",(wallet,))}
+ # Historical ownership data is immutable enough to cache. Prioritise unseen players.
+ todo=[x for x in ids if x not in cached][:batch_size]
  results=[];errors=[]
- # modest concurrency to avoid hammering MFL: each player uses profile + sale + experience requests.
- def one(x):
-  try:return analyse(x,wallet,t)
-  except Exception as e:return (x,e)
- with ThreadPoolExecutor(max_workers=6) as ex:
-  fs={ex.submit(one,x):x for x in ids}
-  done=0
-  for f in as_completed(fs):
-   x=f.result();done+=1
-   if len(x)==2 and isinstance(x[1],Exception):errors.append((x[0],str(x[1])))
-   else:results.append(x)
-   if progress:progress(done,len(ids))
- c=db();init(c);now=datetime.now(timezone.utc).isoformat()
+ for n,x in enumerate(todo,1):
+  try:
+   results.append(analyse(x,wallet,t))
+  except Exception as e:
+   errors.append((x,str(e)))
+   # If MFL says rate limited, stop this batch instead of hammering further.
+   if "rate-limit" in str(e).lower() or "429" in str(e):
+    break
+  if progress:progress(n,len(todo))
+  time.sleep(0.35)
+ now=datetime.now(timezone.utc).isoformat()
  for player_id,cur,source,acq,start,owned,last in results:
   c.execute("""INSERT INTO ownership_v6 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(wallet,player_id) DO UPDATE SET player_name=excluded.player_name,source=excluded.source,acquired_at=excluded.acquired_at,
@@ -143,4 +154,8 @@ def sync(wallet,progress=None):
   progression_owned=excluded.progression_owned,last_progression=excluded.last_progression,updated_at=excluded.updated_at""",
   (wallet,player_id,cur["name"],source,iso(acq),start["overall"],start["pace"],start["shooting"],start["passing"],start["dribbling"],start["defense"],start["physical"],
    cur["overall"],cur["pace"],cur["shooting"],cur["passing"],cur["dribbling"],cur["defense"],cur["physical"],owned,iso(last),now))
- c.commit();c.close();return len(ids),len(results),errors
+ c.commit()
+ analysed=c.execute("SELECT COUNT(*) FROM ownership_v6 WHERE wallet=?",(wallet,)).fetchone()[0]
+ c.close()
+ return len(ids),len(results),errors,analysed,len(todo)
+
