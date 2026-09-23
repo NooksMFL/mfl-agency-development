@@ -70,7 +70,10 @@ def profile(pid,t):
  p=unwrap(get(f"/players/{pid}",t));m=p.get("metadata") or {}
  name=p.get("name") or m.get("name")
  if not name:name=(str(p.get("firstName") or m.get("firstName") or "")+" "+str(p.get("lastName") or m.get("lastName") or "")).strip()
- return {"name":name or f"Player {pid}","overall":stat(p,"overall","overallRating","ovr"),"pace":stat(p,"pace","PAC"),
+ club=p.get("activeContract",{}).get("club") if isinstance(p.get("activeContract"),dict) else None
+ if isinstance(club,dict):club=club.get("name") or club.get("clubName")
+ return {"name":name or f"Player {pid}","age":stat(p,"age"),"position":stat(p,"position","preferredPosition"),"club":club,
+ "overall":stat(p,"overall","overallRating","ovr"),"pace":stat(p,"pace","PAC"),
  "shooting":stat(p,"shooting","SHO"),"passing":stat(p,"passing","PAS"),"dribbling":stat(p,"dribbling","DRI"),
  "defense":stat(p,"defense","defending","DEF"),"physical":stat(p,"physical","physicality","PHY")}
 def todt(v):
@@ -193,3 +196,50 @@ def finish_import(wallet, progress=None, chunk_size=12, pause_seconds=8, max_chu
             break
         time.sleep(pause_seconds)
     return summary
+
+def ensure_v2(c):
+ c.executescript("""CREATE TABLE IF NOT EXISTS player_meta(
+ wallet TEXT,player_id INTEGER,age REAL,position TEXT,club TEXT,PRIMARY KEY(wallet,player_id));
+ CREATE TABLE IF NOT EXISTS snapshots(
+ wallet TEXT,player_id INTEGER,snapshot_at TEXT,ovr REAL,pac REAL,sho REAL,pas REAL,dri REAL,defn REAL,phy REAL,
+ PRIMARY KEY(wallet,player_id,snapshot_at));
+ CREATE TABLE IF NOT EXISTS activity(
+ wallet TEXT,player_id INTEGER,last_event_at TEXT,match_events INTEGER DEFAULT 0,training_events INTEGER DEFAULT 0,total_events INTEGER DEFAULT 0,
+ PRIMARY KEY(wallet,player_id));""");c.commit()
+
+def event_reason(e):
+ return str(e.get("reasonType") or e.get("type") or e.get("eventType") or "").upper()
+
+def refresh_current(wallet, progress=None, batch_size=20):
+ """Refresh current profile + activity using profile/history only; no sale-history call."""
+ wallet=wallet.strip().lower();t=token();c=db();init(c);ensure_v2(c)
+ ids=[r["player_id"] for r in c.execute("SELECT player_id FROM ownership_v65 WHERE wallet=? ORDER BY player_id",(wallet,))]
+ done=0;errors=[]
+ for x in ids[:batch_size]:
+  try:
+   cur=profile(x,t); exps=exp_history(x,t); parsed=[]
+   for e in exps:
+    when=todt(e.get("date") or e.get("createdAt") or e.get("timestamp"))
+    if when:parsed.append((when,e))
+   parsed.sort(key=lambda z:z[0])
+   match_count=sum(1 for _,e in parsed if event_reason(e)=="MATCH")
+   train_count=sum(1 for _,e in parsed if "TRAIN" in event_reason(e))
+   last=parsed[-1][0] if parsed else None
+   c.execute("""INSERT INTO player_meta VALUES(?,?,?,?,?) ON CONFLICT(wallet,player_id) DO UPDATE SET
+    age=excluded.age,position=excluded.position,club=excluded.club""",(wallet,x,cur.get("age"),cur.get("position"),cur.get("club")))
+   c.execute("""INSERT INTO activity VALUES(?,?,?,?,?,?) ON CONFLICT(wallet,player_id) DO UPDATE SET
+    last_event_at=excluded.last_event_at,match_events=excluded.match_events,training_events=excluded.training_events,total_events=excluded.total_events""",
+    (wallet,x,iso(last),match_count,train_count,len(parsed)))
+   now=datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+   c.execute("""INSERT OR REPLACE INTO snapshots VALUES(?,?,?,?,?,?,?,?,?,?)""",
+    (wallet,x,now,cur.get("overall"),cur.get("pace"),cur.get("shooting"),cur.get("passing"),cur.get("dribbling"),cur.get("defense"),cur.get("physical")))
+   # current values in the main cache should move with refreshes; historical baseline remains unchanged.
+   c.execute("""UPDATE ownership_v65 SET current_ovr=?,current_pac=?,current_sho=?,current_pas=?,current_dri=?,current_def=?,current_phy=?,updated_at=? WHERE wallet=? AND player_id=?""",
+    (cur.get("overall"),cur.get("pace"),cur.get("shooting"),cur.get("passing"),cur.get("dribbling"),cur.get("defense"),cur.get("physical"),now,wallet,x))
+   c.commit();done+=1
+  except Exception as e:
+   errors.append((x,str(e)))
+   if "429" in str(e) or "rate-limit" in str(e).lower():break
+  if progress:progress(done,len(ids))
+  time.sleep(.45)
+ c.close();return done,len(ids),errors
