@@ -456,8 +456,12 @@ def ensure_activity_v28(c):
   PRIMARY KEY(wallet,player_id))""")
  c.commit()
 
+def activity_event_date(e):
+ """Return a timezone-aware datetime for an MFL progression event."""
+ return todt(e.get("date") or e.get("createdAt") or e.get("timestamp"))
+
 def _iso_event_date(e):
- dt=event_date(e)
+ dt=activity_event_date(e)
  return dt.isoformat() if dt else None
 
 def refresh_owned_activity_one(wallet,player_id,t=None):
@@ -470,12 +474,12 @@ def refresh_owned_activity_one(wallet,player_id,t=None):
  if not row:
   c.close(); raise RuntimeError("Player ownership baseline not found")
  anchor=row["acquired_at"] if row["source"]=="BOUGHT" and row["acquired_at"] else row["history_start"]
- anchor_dt=parse_dt(anchor) if anchor else None
+ anchor_dt=todt(anchor) if anchor else None
  events=exp_history(player_id,t)
  owned=[]
  for e in events:
   if event_reason(e)!="MATCH": continue
-  dt=event_date(e)
+  dt=activity_event_date(e)
   if dt and (anchor_dt is None or dt>=anchor_dt): owned.append(dt)
  owned.sort()
  first=owned[0].isoformat() if owned else None
@@ -536,7 +540,7 @@ def agency_v28(wallet):
  now=datetime.now(timezone.utc)
  for r in rows:
   d=dict(r)
-  last=parse_dt(d.get("last_match_at")) if d.get("last_match_at") else None
+  last=todt(d.get("last_match_at")) if d.get("last_match_at") else None
   d["days_since_match"]=((now-last).days if last else None)
   d["ovr_gain"]=(d["current_ovr"]-d["start_ovr"]) if d.get("current_ovr") is not None and d.get("start_ovr") is not None else None
   out.append(d)

@@ -181,8 +181,13 @@ with ca:
    with st.spinner("Reading 10 progression histories…"):
     done,stopped=ab.refresh_owned_activity_batch(wallet,10)
    good=sum(1 for x in done if "error" not in x)
-   if stopped: st.warning(f"Saved {good} players, then MFL rate-limited the scan. Wait for the cooldown and press again.")
-   else: st.success(f"Saved activity for {good} players.")
+   errors=[x for x in done if "error" in x]
+   if stopped:
+    st.warning(f"Saved {good} players, then MFL rate-limited the scan. Wait for the cooldown and press again.")
+   elif errors:
+    st.error(f"Saved {good} players; {len(errors)} failed. First error: {errors[0].get('error')}")
+   else:
+    st.success(f"Saved activity for {good} players.")
    st.rerun()
   except Exception as e: st.error(f"{type(e).__name__}: {e}")
 with cb:
