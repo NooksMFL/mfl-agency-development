@@ -171,7 +171,28 @@ with st.expander("🛡️ Backup & diagnostics"):
    if "429" in msg or "RATE_LIMIT" in msg: st.warning("MFL is rate-limiting this request. Try again after the cooldown.")
    else: st.error(f"{type(e).__name__}: {e}")
 
+ac=ab.activity_counts(wallet)
+st.markdown("### 🎮 Ownership match activity")
+st.caption(f"Scanned {ac.get('scanned',0)} / {len(df)} players. MATCH means an MFL match-progression event, not yet a verified official appearance.")
+ca,cb=st.columns([1,3])
+with ca:
+ if st.button("Scan next 10 activity"):
+  try:
+   with st.spinner("Reading 10 progression histories…"):
+    done,stopped=ab.refresh_owned_activity_batch(wallet,10)
+   good=sum(1 for x in done if "error" not in x)
+   if stopped: st.warning(f"Saved {good} players, then MFL rate-limited the scan. Wait for the cooldown and press again.")
+   else: st.success(f"Saved activity for {good} players.")
+   st.rerun()
+  except Exception as e: st.error(f"{type(e).__name__}: {e}")
+with cb:
+ st.caption("Safe/resumable: each player is saved immediately. Repeated presses continue with the least-recently scanned players.")
+
 m1,m2,m3,m4,m5=st.columns(5)
+df=pd.DataFrame(ab.agency_v28(wallet))
+if not df.empty:
+ df["match_events"]=df["match_events_owned"]
+ df["days_since_activity"]=df["days_since_match"]
 m1.metric("Players",len(df));m2.metric("Improved OVR",int((df["OVR +"]>0).sum()))
 m3.metric("New / original",int((df.source=="NEW MINT / ORIGINAL").sum()))
 m4.metric("Bought",int((df.source=="BOUGHT").sum()))
@@ -219,5 +240,5 @@ with tabs[4]:
  st.dataframe(v[["Status","player_name","age","position","club","source","Acquired","start_ovr","current_ovr","OVR +","match_events","Days since activity"]],
   hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","club":"Club","source":"Ownership","current_ovr":"OVR","start_ovr":"Start","match_events":"Match events"})
 
-st.caption("Ownership development baselines: BOUGHT = verified purchase into this wallet; NEW / ORIGINAL = MFL INITIAL player state. Match-event counts are based on MFL progression history and are not yet restricted to official league fixtures.")
+st.caption("Ownership development baselines: BOUGHT = verified purchase into this wallet; NEW / ORIGINAL = MFL INITIAL player state. Match activity is counted only from the current ownership baseline onward. MATCH is an MFL progression-history label and is not yet claimed as an official appearance count.")
 c.close()

@@ -446,3 +446,98 @@ def inspect_activity_events(player_id):
  return {"event_count":len(events),"reasons":reasons,"match_count":len(matches),
          "sample_match":matches[-1] if matches else None,
          "sample_events":events[-5:] if events else []}
+
+def ensure_activity_v28(c):
+ c.execute("""CREATE TABLE IF NOT EXISTS ownership_activity_v28(
+  wallet TEXT NOT NULL, player_id INTEGER NOT NULL,
+  match_events_owned INTEGER NOT NULL DEFAULT 0,
+  last_match_at TEXT, first_match_at TEXT,
+  activity_scanned_at TEXT,
+  PRIMARY KEY(wallet,player_id))""")
+ c.commit()
+
+def _iso_event_date(e):
+ dt=event_date(e)
+ return dt.isoformat() if dt else None
+
+def refresh_owned_activity_one(wallet,player_id,t=None):
+ """Count MATCH progression events from the current ownership baseline onward."""
+ wallet=wallet.strip().lower(); player_id=int(player_id); t=t or token()
+ c=db();init(c);ensure_v2(c);ensure_activity_v28(c)
+ row=c.execute("""SELECT source,acquired_at,history_start
+                  FROM ownership_v65 WHERE wallet=? AND player_id=?""",
+               (wallet,player_id)).fetchone()
+ if not row:
+  c.close(); raise RuntimeError("Player ownership baseline not found")
+ anchor=row["acquired_at"] if row["source"]=="BOUGHT" and row["acquired_at"] else row["history_start"]
+ anchor_dt=parse_dt(anchor) if anchor else None
+ events=exp_history(player_id,t)
+ owned=[]
+ for e in events:
+  if event_reason(e)!="MATCH": continue
+  dt=event_date(e)
+  if dt and (anchor_dt is None or dt>=anchor_dt): owned.append(dt)
+ owned.sort()
+ first=owned[0].isoformat() if owned else None
+ last=owned[-1].isoformat() if owned else None
+ now=datetime.now(timezone.utc).isoformat()
+ c.execute("""INSERT INTO ownership_activity_v28(wallet,player_id,match_events_owned,first_match_at,last_match_at,activity_scanned_at)
+ VALUES(?,?,?,?,?,?)
+ ON CONFLICT(wallet,player_id) DO UPDATE SET
+ match_events_owned=excluded.match_events_owned,
+ first_match_at=excluded.first_match_at,
+ last_match_at=excluded.last_match_at,
+ activity_scanned_at=excluded.activity_scanned_at""",
+ (wallet,player_id,len(owned),first,last,now))
+ c.commit();c.close()
+ return len(owned),last
+
+def refresh_owned_activity_batch(wallet,limit=10):
+ """Refresh least-recently scanned players. Stops cleanly if MFL rate-limits."""
+ wallet=wallet.strip().lower();t=token()
+ c=db();init(c);ensure_v2(c);ensure_activity_v28(c)
+ rows=c.execute("""SELECT o.player_id,o.player_name,a.activity_scanned_at
+ FROM ownership_v65 o LEFT JOIN ownership_activity_v28 a
+ ON a.wallet=o.wallet AND a.player_id=o.player_id
+ WHERE o.wallet=?
+ ORDER BY CASE WHEN a.activity_scanned_at IS NULL THEN 0 ELSE 1 END,
+          a.activity_scanned_at ASC, o.player_name ASC LIMIT ?""",(wallet,int(limit))).fetchall()
+ c.close()
+ done=[]; stopped=None
+ for r in rows:
+  try:
+   n,last=refresh_owned_activity_one(wallet,r["player_id"],t)
+   done.append({"player_id":r["player_id"],"player_name":r["player_name"],"match_events_owned":n,"last_match_at":last})
+   time.sleep(1.0)
+  except Exception as e:
+   if "429" in str(e) or "RATE_LIMIT" in str(e):
+    stopped=str(e);break
+   done.append({"player_id":r["player_id"],"player_name":r["player_name"],"error":str(e)})
+ return done,stopped
+
+def activity_counts(wallet):
+ wallet=wallet.strip().lower();c=db();init(c);ensure_activity_v28(c)
+ r=c.execute("""SELECT COUNT(*) scanned,
+ SUM(CASE WHEN match_events_owned>0 THEN 1 ELSE 0 END) active
+ FROM ownership_activity_v28 WHERE wallet=?""",(wallet,)).fetchone()
+ c.close();return dict(r)
+
+def agency_v28(wallet):
+ """Dashboard rows with verified ownership-baseline match activity."""
+ wallet=wallet.strip().lower();c=db();init(c);ensure_v2(c);ensure_activity_v28(c)
+ rows=c.execute("""SELECT o.*,m.age,m.position,m.club,
+ a.match_events_owned,a.first_match_at,a.last_match_at,a.activity_scanned_at
+ FROM ownership_v65 o
+ LEFT JOIN player_meta m ON m.wallet=o.wallet AND m.player_id=o.player_id
+ LEFT JOIN ownership_activity_v28 a ON a.wallet=o.wallet AND a.player_id=o.player_id
+ WHERE o.wallet=?""",(wallet,)).fetchall()
+ c.close()
+ out=[]
+ now=datetime.now(timezone.utc)
+ for r in rows:
+  d=dict(r)
+  last=parse_dt(d.get("last_match_at")) if d.get("last_match_at") else None
+  d["days_since_match"]=((now-last).days if last else None)
+  d["ovr_gain"]=(d["current_ovr"]-d["start_ovr"]) if d.get("current_ovr") is not None and d.get("start_ovr") is not None else None
+  out.append(d)
+ return out
