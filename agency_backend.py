@@ -66,13 +66,48 @@ def stat(p,*names):
  for src in (p,a,r,m):
   for n in names:
    if isinstance(src,dict) and src.get(n) is not None:return src[n]
+
+def deep_values(obj, key_names):
+ keys={str(k).lower() for k in key_names}
+ found=[]
+ def walk(x,path=""):
+  if isinstance(x,dict):
+   for k,v in x.items():
+    p=f"{path}.{k}" if path else str(k)
+    if str(k).lower() in keys and v not in (None,"",[],{}): found.append((p,v))
+    walk(v,p)
+  elif isinstance(x,list):
+   for i,v in enumerate(x): walk(v,f"{path}[{i}]")
+ walk(obj)
+ return found
+
+def first_scalar(obj, names):
+ for _,v in deep_values(obj,names):
+  if isinstance(v,(str,int,float,bool)): return v
+ return None
+
+def player_meta_from_payload(payload):
+ p=unwrap(payload)
+ age=first_scalar(p,["age"])
+ pos=first_scalar(p,["position","preferredPosition","primaryPosition","naturalPosition"])
+ # Club/team is intentionally conservative: prefer named current/active contract structures.
+ club=None
+ for key in ("activeContract","contract","currentClub","club"):
+  candidates=deep_values(p,[key])
+  for _,v in candidates:
+   if isinstance(v,dict):
+    club=first_scalar(v,["name","clubName","teamName"])
+   elif isinstance(v,str): club=v
+   if club: break
+  if club: break
+ return {"age":age,"position":pos,"club":club}
+
 def profile(pid,t):
  p=unwrap(get(f"/players/{pid}",t));m=p.get("metadata") or {}
  name=p.get("name") or m.get("name")
  if not name:name=(str(p.get("firstName") or m.get("firstName") or "")+" "+str(p.get("lastName") or m.get("lastName") or "")).strip()
- club=p.get("activeContract",{}).get("club") if isinstance(p.get("activeContract"),dict) else None
- if isinstance(club,dict):club=club.get("name") or club.get("clubName")
- return {"name":name or f"Player {pid}","age":stat(p,"age"),"position":stat(p,"position","preferredPosition"),"club":club,
+ meta=player_meta_from_payload(p)
+ return {"name":name or f"Player {pid}","age":meta.get("age"),"position":meta.get("position"),"club":meta.get("club"),
  "overall":stat(p,"overall","overallRating","ovr"),"pace":stat(p,"pace","PAC"),
  "shooting":stat(p,"shooting","SHO"),"passing":stat(p,"passing","PAS"),"dribbling":stat(p,"dribbling","DRI"),
  "defense":stat(p,"defense","defending","DEF"),"physical":stat(p,"physical","physicality","PHY")}
@@ -241,5 +276,69 @@ def refresh_current(wallet, progress=None, batch_size=20):
    errors.append((x,str(e)))
    if "429" in str(e) or "rate-limit" in str(e).lower():break
   if progress:progress(done,len(ids))
+  time.sleep(.45)
+ c.close();return done,len(ids),errors
+
+def roster_payload(wallet,t):
+ return arr(get("/players",t,{"ownerWalletAddress":wallet,"limit":1200}))
+
+def roster_meta_map(wallet,t):
+ out={}
+ for raw in roster_payload(wallet,t):
+  p=unwrap(raw)
+  pid=p.get("id") or p.get("playerId") or p.get("playerID")
+  try: pid=int(pid)
+  except: continue
+  out[pid]=player_meta_from_payload(p)
+ return out
+
+def refresh_current_v21(wallet, progress=None, batch_size=20):
+ wallet=wallet.strip().lower();t=token();c=db();init(c);ensure_v2(c)
+ # One roster call gives us the metadata shape that previously supplied age successfully.
+ rmeta=roster_meta_map(wallet,t)
+ ids=[r["player_id"] for r in c.execute("SELECT player_id FROM ownership_v65 WHERE wallet=? ORDER BY player_id",(wallet,))]
+ # Refresh least-recently snapshotted first, so each press advances through the agency.
+ ordered=[]
+ for pid in ids:
+  row=c.execute("SELECT MAX(snapshot_at) x FROM snapshots WHERE wallet=? AND player_id=?",(wallet,pid)).fetchone()
+  ordered.append((row["x"] if row and row["x"] else "",pid))
+ ordered=[pid for _,pid in sorted(ordered,key=lambda z:z[0])]
+ done=0;errors=[]
+ for x in ordered[:batch_size]:
+  try:
+   raw=get(f"/players/{x}",t);cur=profile(x,t) if False else None
+   # Parse this already-fetched profile without making a duplicate API request.
+   p=unwrap(raw);m=p.get("metadata") or {}
+   name=p.get("name") or m.get("name")
+   pm=player_meta_from_payload(p); rm=rmeta.get(x,{})
+   age=pm.get("age") if pm.get("age") is not None else rm.get("age")
+   position=pm.get("position") or rm.get("position")
+   club=pm.get("club") or rm.get("club")
+   current={"overall":stat(p,"overall","overallRating","ovr"),"pace":stat(p,"pace","PAC"),
+    "shooting":stat(p,"shooting","SHO"),"passing":stat(p,"passing","PAS"),"dribbling":stat(p,"dribbling","DRI"),
+    "defense":stat(p,"defense","defending","DEF"),"physical":stat(p,"physical","physicality","PHY")}
+   exps=exp_history(x,t);parsed=[]
+   for e in exps:
+    when=todt(e.get("date") or e.get("createdAt") or e.get("timestamp"))
+    if when:parsed.append((when,e))
+   parsed.sort(key=lambda z:z[0])
+   match_count=sum(1 for _,e in parsed if event_reason(e)=="MATCH")
+   train_count=sum(1 for _,e in parsed if "TRAIN" in event_reason(e))
+   last=parsed[-1][0] if parsed else None
+   c.execute("""INSERT INTO player_meta VALUES(?,?,?,?,?) ON CONFLICT(wallet,player_id) DO UPDATE SET
+    age=excluded.age,position=excluded.position,club=excluded.club""",(wallet,x,age,position,club))
+   c.execute("""INSERT INTO activity VALUES(?,?,?,?,?,?) ON CONFLICT(wallet,player_id) DO UPDATE SET
+    last_event_at=excluded.last_event_at,match_events=excluded.match_events,training_events=excluded.training_events,total_events=excluded.total_events""",
+    (wallet,x,iso(last),match_count,train_count,len(parsed)))
+   now=datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+   c.execute("INSERT OR REPLACE INTO snapshots VALUES(?,?,?,?,?,?,?,?,?,?)",
+    (wallet,x,now,current["overall"],current["pace"],current["shooting"],current["passing"],current["dribbling"],current["defense"],current["physical"]))
+   c.execute("""UPDATE ownership_v65 SET current_ovr=?,current_pac=?,current_sho=?,current_pas=?,current_dri=?,current_def=?,current_phy=?,updated_at=? WHERE wallet=? AND player_id=?""",
+    (current["overall"],current["pace"],current["shooting"],current["passing"],current["dribbling"],current["defense"],current["physical"],now,wallet,x))
+   c.commit();done+=1
+  except Exception as e:
+   errors.append((x,str(e)))
+   if "429" in str(e) or "rate-limit" in str(e).lower():break
+  if progress:progress(done,min(batch_size,len(ordered)))
   time.sleep(.45)
  c.close();return done,len(ids),errors

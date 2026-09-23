@@ -56,12 +56,12 @@ with top1:
  if st.button("🔄 Refresh 20 players",type="primary"):
   bar=st.progress(0,text="Refreshing current data…")
   def prog(n,total):bar.progress(min(1,n/max(1,20)),text=f"Refreshing {n}/20…")
-  done,total,errs=ab.refresh_current(wallet,prog,20);bar.empty()
+  done,total,errs=ab.refresh_current_v21(wallet,prog,20);bar.empty()
   if errs:st.warning(f"Refreshed {done}; {len(errs)} issue(s).")
   else:st.success(f"Refreshed {done} players.")
   st.rerun()
 with top2:
- st.caption("Refresh builds current snapshots and activity data in API-safe groups of 20. Historical acquisition baselines are not re-fetched.")
+ st.caption("Refresh fills age/position/club from both the live roster and player profile, then updates snapshots/activity. Each press moves to the least-recently refreshed players.")
 
 df=load()
 m1,m2,m3,m4,m5=st.columns(5)
@@ -75,7 +75,7 @@ with tabs[0]:
  st.subheader("Top developers")
  v=df[df["OVR +"]>0].sort_values(["OVR +","current_ovr"],ascending=False)
  st.dataframe(v[["Status","player_name","age","position","start_ovr","current_ovr","OVR +","PAC +","SHO +","PAS +","DRI +","DEF +","PHY +"]],
-  hide_index=True,use_container_width=True,column_config={"player_name":"Player","start_ovr":"Start","current_ovr":"Current"})
+  hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","start_ovr":"Start","current_ovr":"Current"})
 with tabs[1]:
  st.subheader("Needs games / attention")
  st.caption("This becomes more accurate as players are refreshed. 'Match events' currently comes directly from MFL progression-history events labelled MATCH.")
@@ -110,7 +110,7 @@ with tabs[4]:
  elif sort=="Age":v=v.sort_values("age",na_position="last")
  else:v=v.sort_values("player_name")
  st.dataframe(v[["Status","player_name","age","position","club","source","Acquired","start_ovr","current_ovr","OVR +","match_events","Days since activity"]],
-  hide_index=True,use_container_width=True,column_config={"player_name":"Player","source":"Ownership","current_ovr":"OVR","start_ovr":"Start","match_events":"Match events"})
+  hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","club":"Club","source":"Ownership","current_ovr":"OVR","start_ovr":"Start","match_events":"Match events"})
 
 st.caption("Ownership development baselines: BOUGHT = verified purchase into this wallet; NEW / ORIGINAL = MFL INITIAL player state. Match-event counts are based on MFL progression history and are not yet restricted to official league fixtures.")
 c.close()
