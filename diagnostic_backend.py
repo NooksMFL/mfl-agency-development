@@ -1,98 +1,60 @@
 import os, requests
 from datetime import datetime, timezone
 BASE="https://api.playmfl.com"
-H={"Accept":"*/*","Origin":"https://app.playmfl.com","Referer":"https://app.playmfl.com/","User-Agent":"Mozilla/5.0"}
-
+BROWSER_HEADERS={
+ "Accept":"*/*","Origin":"https://app.playmfl.com","Referer":"https://app.playmfl.com/",
+ "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0"
+}
 def token():
-    rt=os.getenv("MFL_REFRESH_TOKEN")
-    if not rt: raise RuntimeError("MFL_REFRESH_TOKEN missing")
-    r=requests.post(BASE+"/auth/refresh",headers=H,json={"refreshToken":rt},timeout=20); r.raise_for_status()
-    d=r.json(); a=d.get("access") or (d.get("data") or {}).get("access")
-    if isinstance(a,dict): a=a.get("token")
-    if not a: raise RuntimeError("No access token returned")
-    return a
-
-def ah(t):
-    h=dict(H); h["Authorization"]="Bearer "+t; return h
-
-def get_json(path,t,params=None):
-    r=requests.get(BASE+path,headers=ah(t),params=params,timeout=30)
-    r.raise_for_status(); return r.json()
-
-def arr(d):
-    if isinstance(d,list): return d
-    if isinstance(d,dict):
-        if isinstance(d.get("data"),list): return d["data"]
-        for k in ("items","results","players"):
-            if isinstance(d.get(k),list): return d[k]
-    return []
-
-def profile(pid,t):
-    d=get_json(f"/players/{pid}",t)
-    if isinstance(d,dict) and isinstance(d.get("data"),dict): d=d["data"]
-    if isinstance(d,dict) and isinstance(d.get("player"),dict): d=d["player"]
-    return d
-
-def player_name(p,pid):
-    m=p.get("metadata") or {}
-    name=p.get("name") or m.get("name")
-    if name:return name
-    return (str(p.get("firstName") or m.get("firstName") or "")+" "+str(p.get("lastName") or m.get("lastName") or "")).strip() or f"Player {pid}"
-
-def sales(pid,t,limit=100):
-    return arr(get_json("/listings/feed",t,{"limit":limit,"playerId":pid}))
-
-def experiences(pid,t):
-    return arr(get_json(f"/players/{pid}/experiences/history",t))
-
-def ts(v):
-    if v is None:return None
-    x=float(v)
-    if x>10_000_000_000:x/=1000
-    return datetime.fromtimestamp(x,tz=timezone.utc)
-
-def fmt(dt):
-    return dt.strftime("%d %b %Y %H:%M UTC") if dt else "—"
-
-def latest_purchase_into_wallet(entries,wallet):
-    w=wallet.lower()
-    matches=[]
-    for e in entries:
-        buyer=str(e.get("buyerAddress") or "").lower()
-        if buyer==w:
-            dt=ts(e.get("purchaseDateTime"))
-            if dt:matches.append((dt,e))
-    return max(matches,key=lambda x:x[0]) if matches else (None,None)
-
-def reconstruct_at(exps,acq_dt):
-    """Carry progression values forward chronologically and return state at acquisition.
-    This intentionally does not invent values missing before acquisition."""
-    state={k:None for k in ("overall","pace","shooting","passing","dribbling","defense","physical")}
-    before=None; after=None
-    parsed=[]
-    for e in exps:
-        dt=ts(e.get("date"))
-        if dt:parsed.append((dt,e))
-    parsed.sort(key=lambda x:x[0])
-    for dt,e in parsed:
-        vals=e.get("values") or {}
-        if acq_dt and dt<=acq_dt:
-            for k in state:
-                if vals.get(k) is not None:state[k]=vals[k]
-            before=(dt,e)
-        elif acq_dt and dt>acq_dt and after is None:
-            after=(dt,e)
-    return state,before,after,len(parsed)
-
+ rt=os.getenv("MFL_REFRESH_TOKEN")
+ if not rt: raise RuntimeError("MFL_REFRESH_TOKEN missing")
+ r=requests.post(f"{BASE}/auth/refresh",headers=BROWSER_HEADERS,json={"refreshToken":rt},timeout=20)
+ r.raise_for_status(); d=r.json(); a=d.get("access")
+ if a is None and isinstance(d.get("data"),dict): a=d["data"].get("access")
+ if isinstance(a,dict): a=a.get("token")
+ if not a: raise RuntimeError("MFL refresh succeeded but no access token returned")
+ return a
+def headers(t):
+ h=dict(BROWSER_HEADERS);h["Authorization"]=f"Bearer {t}";return h
+def get(path,t,params=None):
+ r=requests.get(BASE+path,headers=headers(t),params=params,timeout=30)
+ if not r.ok: raise RuntimeError(f"{path} returned {r.status_code}: {r.text[:250]}")
+ return r.json()
+def items(d):
+ if isinstance(d,list):return d
+ if isinstance(d,dict):
+  for k in ("data","items","results","listings","history"):
+   x=d.get(k)
+   if isinstance(x,list):return x
+   if isinstance(x,dict):
+    y=items(x)
+    if y:return y
+ return []
+def dt(v):
+ if v is None:return None
+ try:
+  x=float(v)
+  if x>1e10:x/=1000
+  return datetime.fromtimestamp(x,tz=timezone.utc)
+ except:return None
+def fmt(x):return x.strftime("%d %b %Y %H:%M UTC") if x else "—"
 def diagnose(pid,wallet):
-    t=token(); p=profile(pid,t); s=sales(pid,t,100); x=experiences(pid,t)
-    acq,event=latest_purchase_into_wallet(s,wallet)
-    state,before,after,n=reconstruct_at(x,acq)
-    return {
-      "player_id":pid,"name":player_name(p,pid),"sale_count":len(s),"experience_count":n,
-      "acquired":fmt(acq),"acquired_raw":acq,"sale_event":event,
-      "state":state,
-      "previous_progression":fmt(before[0]) if before else "—",
-      "next_progression":fmt(after[0]) if after else "—",
-      "sales":s,"experiences":x
-    }
+ t=token()
+ prof=get(f"/players/{pid}",t)
+ sales=items(get("/listings/feed",t,{"limit":100,"playerId":pid}))
+ exp=items(get(f"/players/{pid}/experiences/history",t))
+ w=wallet.lower(); buys=[]
+ for e in sales:
+  buyer=str(e.get("buyerAddress") or e.get("buyerWalletAddress") or "").lower()
+  when=dt(e.get("purchaseDateTime") or e.get("createdAt") or e.get("date"))
+  if buyer==w and when:buys.append((when,e))
+ acq,event=max(buys,key=lambda x:x[0]) if buys else (None,None)
+ parsed=[]
+ for e in exp:
+  when=dt(e.get("date") or e.get("createdAt") or e.get("timestamp"))
+  if when:parsed.append((when,e))
+ parsed.sort(key=lambda x:x[0])
+ before=max((x for x in parsed if acq and x[0]<=acq),default=None,key=lambda x:x[0])
+ after=min((x for x in parsed if acq and x[0]>acq),default=None,key=lambda x:x[0])
+ return {"profile":prof,"sales":sales,"experiences":exp,"acquired":fmt(acq),"event":event,
+         "previous":fmt(before[0]) if before else "—","next":fmt(after[0]) if after else "—"}
