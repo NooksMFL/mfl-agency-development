@@ -32,16 +32,37 @@ def load():
 df=load()
 analysed=len(df)
 st.subheader("Agency import")
-st.caption("Historical ownership is cached. Each batch only analyses players not already stored, keeping requests gentle on MFL.")
-if st.button("Analyse next 12 players",type="primary"):
- bar=st.progress(0,text="Preparing batch…")
- def prog(n,total):bar.progress(n/max(total,1),text=f"Analysing {n}/{total}…")
- try:
-  total,ok,errors,analysed,planned=ab.sync(wallet,prog,batch_size=12);bar.empty()
-  st.success(f"{ok} added · {analysed}/{total} agency players analysed.")
-  if errors:st.warning(f"{len(errors)} player(s) could not be analysed. If MFL rate-limited the request, wait before trying again.")
-  st.rerun()
- except Exception as e:bar.empty();st.error(f"{type(e).__name__}: {e}")
+st.caption("Historical ownership is cached. Use Finish agency import to work through all remaining uncached players automatically in controlled batches. Completed players are saved as it goes.")
+col_import1,col_import2=st.columns([1,1])
+with col_import1:
+ if st.button("Analyse next 12 players"):
+  bar=st.progress(0,text="Preparing batch…")
+  def prog(n,total):bar.progress(n/max(total,1),text=f"Analysing {n}/{total}…")
+  try:
+   total,ok,errors,analysed,planned=ab.sync(wallet,prog,batch_size=12);bar.empty()
+   st.success(f"{ok} added · {analysed}/{total} agency players analysed.")
+   if errors:st.warning(f"{len(errors)} player(s) could not be analysed.")
+   st.rerun()
+  except Exception as e:bar.empty();st.error(f"{type(e).__name__}: {e}")
+with col_import2:
+ if st.button("Finish agency import",type="primary"):
+  bar=st.progress(0,text="Starting safe automatic import…")
+  status=st.empty()
+  def fullprog(done,total,chunk):
+   bar.progress(done/max(total,1),text=f"Agency import: {done}/{total}")
+   status.caption(f"Completed safe batch {chunk}. Pausing between batches to protect the MFL API.")
+  try:
+   result=ab.finish_import(wallet,fullprog,chunk_size=12,pause_seconds=8)
+   bar.empty();status.empty()
+   if result["complete"]:
+    st.success(f"Agency import complete: {result['analysed']}/{result['total']} players.")
+   elif result["rate_limited"]:
+    st.warning(f"MFL rate limit reached safely at {result['analysed']}/{result['total']}. Everything completed so far is saved. Wait a while, then press Finish agency import again.")
+   else:
+    st.info(f"Import paused at {result['analysed']}/{result['total']}. Completed data is saved; press Finish agency import again to continue.")
+   st.rerun()
+  except Exception as e:
+   bar.empty();status.empty();st.error(f"{type(e).__name__}: {e}")
 
 df=load()
 if df.empty:

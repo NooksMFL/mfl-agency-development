@@ -175,3 +175,21 @@ def sync(wallet,progress=None,batch_size=12):
  c.close()
  return len(ids),len(results),errors,analysed,len(todo)
 
+
+def finish_import(wallet, progress=None, chunk_size=12, pause_seconds=8, max_chunks=40):
+    """Process uncached players in safe chunks during one Streamlit run."""
+    summary={"total":0,"analysed":0,"added":0,"errors":[],"complete":False,"rate_limited":False}
+    for chunk in range(max_chunks):
+        total,added,errors,analysed,planned=sync(wallet,None,batch_size=chunk_size)
+        summary.update(total=total,analysed=analysed,added=summary["added"]+added)
+        summary["errors"].extend(errors)
+        if progress: progress(analysed,total,chunk+1)
+        if planned==0 or analysed>=total:
+            summary["complete"]=True
+            break
+        limited=any(("429" in msg or "rate-limit" in msg.lower() or "rate limit" in msg.lower()) for _,msg in errors)
+        if limited:
+            summary["rate_limited"]=True
+            break
+        time.sleep(pause_seconds)
+    return summary
