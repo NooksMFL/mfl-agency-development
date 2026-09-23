@@ -622,3 +622,27 @@ def finish_activity_scan(wallet, progress_callback=None, max_players=None):
     if progress_callback: progress_callback(done,total,r["player_name"],-1)
     break
  return {"completed":done,"attempted":total,"errors":errors}
+
+def probe_match_endpoints(player_id):
+ """Diagnostic only: test plausible first-party MFL routes for actual match/appearance data."""
+ pid=int(player_id); t=token()
+ candidates=[
+  (f"/players/{pid}/matches",None),
+  (f"/players/{pid}/match-history",None),
+  (f"/players/{pid}/games",None),
+  (f"/players/{pid}/appearances",None),
+  ("/matches",{"playerId":pid,"limit":10}),
+  ("/matches/feed",{"playerId":pid,"limit":10}),
+  ("/matches/history",{"playerId":pid,"limit":10}),
+ ]
+ out=[]
+ for path,params in candidates:
+  try:
+   r=requests.get(BASE+path,headers=ah(t),params=params,timeout=12)
+   item={"path":path,"params":params,"status":r.status_code}
+   try:item["json"]=r.json()
+   except Exception:item["text"]=r.text[:800]
+   out.append(item)
+   if r.status_code==429:break
+  except Exception as e:out.append({"path":path,"params":params,"error":str(e)})
+ return out

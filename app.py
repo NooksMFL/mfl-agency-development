@@ -230,6 +230,22 @@ if remaining:
    st.error(f"{type(e).__name__}: {e}")
    st.info("Anything completed before the error is already saved. Press Finish activity scan again to resume.")
 
+
+with st.expander("🔎 Real match-history API diagnostic"):
+ st.caption("MFL MATCH progression is not a reliable appearance count. Use this on a player you know has played; it tests first-party MFL routes only and does not alter the database.")
+ probe_choices={f"{r.player_name} · {int(r.player_id)}":int(r.player_id) for _,r in df.sort_values("player_name").iterrows()}
+ probe_name=st.selectbox("Known player who has played matches",probe_choices,key="match_api_probe")
+ if st.button("Probe match API"):
+  try:
+   with st.spinner("Testing MFL match-history routes…"):
+    probe=ab.probe_match_endpoints(probe_choices[probe_name])
+   for result in probe:
+    status=result.get("status","error")
+    with st.expander(f"{status} · {result.get('path')}",expanded=(status==200)):
+     st.json(result,expanded=True)
+  except Exception as e:
+   st.error(f"{type(e).__name__}: {e}")
+
 m1,m2,m3,m4,m5=st.columns(5)
 activity_df=pd.DataFrame(ab.agency_v28(wallet))
 if not df.empty and not activity_df.empty:
@@ -282,8 +298,8 @@ with tabs[0]:
  st.dataframe(v[["Status","player_name","age","position","start_ovr","current_ovr","OVR +","PAC +","SHO +","PAS +","DRI +","DEF +","PHY +"]],
   hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","start_ovr":"Start","current_ovr":"Current"})
 with tabs[1]:
- st.subheader("🎮 Needs Games")
- st.caption("Management view based on MFL MATCH-progression activity during the current ownership spell. MATCH is activity evidence, not yet a verified official appearance count.")
+ st.subheader("🎮 Match progression activity")
+ st.caption("Temporary diagnostic view. We have confirmed that MFL MATCH progression events are not a reliable appearance count, so 0 here does not mean 0 games played.")
 
  ng=df.copy()
  if ng.empty:
@@ -313,8 +329,8 @@ with tabs[1]:
    tag=str(ng.at[i,"tag"]).upper() if "tag" in ng.columns and pd.notna(ng.at[i,"tag"]) else "NORMAL"
    if tag=="PRIORITY": return "⭐ PRIORITY"
    if pd.isna(m) or int(m)==0:
-    if "NEW MINT" in status and pd.notna(age) and age<=23: return "🆕 NEW MINT · NO MATCH"
-    return "🚨 NO MATCH ACTIVITY"
+    if "NEW MINT" in status and pd.notna(age) and age<=23: return "🆕 NEW MINT · NO MATCH PROGRESSION"
+    return "⚠️ NO MATCH PROGRESSION"
    if pd.notna(d) and d>=30: return "🔴 30+ DAYS"
    if pd.notna(d) and d>=14: return "🟠 14–29 DAYS"
    if tag=="DEVELOP": return "🏷️ DEVELOP"
@@ -322,15 +338,15 @@ with tabs[1]:
    return "🟢 RECENT"
 
   ng["Attention"]=pd.Series({i:attention_reason(i) for i in ng.index})
-  order={"⭐ PRIORITY":0,"🆕 NEW MINT · NO MATCH":1,"🚨 NO MATCH ACTIVITY":2,
+  order={"⭐ PRIORITY":0,"🆕 NEW MINT · NO MATCH PROGRESSION":1,"⚠️ NO MATCH PROGRESSION":2,
          "🔴 30+ DAYS":3,"🟠 14–29 DAYS":4,"🏷️ DEVELOP":5,
          "👀 WATCH":6,"🟢 RECENT":7,"⚪ NOT SCANNED":8}
   ng["_attention_order"]=ng["Attention"].map(order).fillna(9)
 
   # Summary metrics.
   c1,c2,c3,c4,c5=st.columns(5)
-  c1.metric("New mints · no match",int((ng["Attention"]=="🆕 NEW MINT · NO MATCH").sum()))
-  c2.metric("Other · no match",int((ng["Attention"]=="🚨 NO MATCH ACTIVITY").sum()))
+  c1.metric("New mints · no match",int((ng["Attention"]=="🆕 NEW MINT · NO MATCH PROGRESSION").sum()))
+  c2.metric("Other · no match",int((ng["Attention"]=="⚠️ NO MATCH PROGRESSION").sum()))
   c3.metric("30+ days",int((ng["Attention"]=="🔴 30+ DAYS").sum()))
   c4.metric("14–29 days",int((ng["Attention"]=="🟠 14–29 DAYS").sum()))
   c5.metric("Recent",int((ng["Attention"]=="🟢 RECENT").sum()))
@@ -339,7 +355,7 @@ with tabs[1]:
   q1,q2,q3,q4=st.columns(4)
   young_only=q1.toggle("23 & under",value=False)
   developing_only=q2.toggle("Developing only",value=False)
-  no_match_only=q3.toggle("No match activity",value=False)
+  no_match_only=q3.toggle("No match progression",value=False)
   stale_only=q4.toggle("14+ days / never",value=False)
 
   with st.expander("More filters",expanded=False):
@@ -414,7 +430,7 @@ with tabs[1]:
 
   st.markdown(f"#### Players shown · {len(display)}")
   st.dataframe(display,use_container_width=True,hide_index=True,height=560)
-  st.caption("Attention buckets are workflow flags, not player-quality ratings. 'Never' means no MFL MATCH progression event was found from the current ownership baseline onward.")
+  st.caption("Attention buckets are workflow flags, not player-quality ratings. 'Never' means no MFL MATCH progression event was found. It does NOT mean the player never played.")
 
 with tabs[2]:
  mint=df[df.source=="NEW MINT / ORIGINAL"].sort_values(["OVR +","current_ovr"],ascending=False)
@@ -444,4 +460,3 @@ with tabs[4]:
   hide_index=True,use_container_width=True,column_config={"player_name":"Player","age":"Age","position":"Position","club":"Club","source":"Ownership","current_ovr":"OVR","start_ovr":"Start","match_events":"Match events"})
 
 st.caption("Ownership development baselines: BOUGHT = verified purchase into this wallet; NEW / ORIGINAL = MFL INITIAL player state. Match activity is counted only from the current ownership baseline onward. MATCH is an MFL progression-history label and is not yet claimed as an official appearance count.")
-c.close()
